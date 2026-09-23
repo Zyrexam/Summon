@@ -1,0 +1,13 @@
+{
+  "name": "summon",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm -r --parallel --if-present dev",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r --if-present test"
+  },
+  "devDependencies": {
+    "playwright": "^1.63.0",
+    "typescript": "^5.7.0"
+  }
+}
