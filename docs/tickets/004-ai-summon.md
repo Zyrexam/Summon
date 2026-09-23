@@ -10,11 +10,11 @@ resolution: null
 **Do**
 
 - `@ai` in composer → client builds last ~15 lines context → one relay call.
-- Answer posts as encrypted room message from **Ksana AI** (not a roster member).
+- Answer posts as encrypted room message from **Summon AI** (not a roster member).
 - Relay: injected, stores nothing; Anthropic via `ANTHROPIC_API_KEY`.
 - UI: whole-arrival (no stream), ember sender, no autocomplete.
 - Context capped (~50 lines server-side).
 
 **Done when**
 
-- Typing `@ai` question shows an answer as Ksana AI in the room; AI never appears as a member.
+- Typing `@ai` question shows an answer as Summon AI in the room; AI never appears as a member.

@@ -7,7 +7,7 @@ Locked calls. Edit only deliberately.
 | 1 | Custom stack: Node + WS relay, shared TypeScript core. No Matrix, no federation. |
 | 2 | E2EE with vodozemac (Megolm) in the browser. Server stores ciphertext only. |
 | 3 | `@ai` is client-mediated: client builds recent context → one relay call → answer returns as an encrypted room message. |
-| 4 | Ksana AI is not a member: never on the roster, never DM-able. |
+| 4 | Summon AI is not a member: never on the roster, never DM-able. |
 | 5 | AI memory ends when the room empties or sits idle 24h. Human history stays. |
 | 6 | One device per member (new login evicts old). Multi-device later. |
 | 7 | Relay stores nothing; provider must accept zero-data-retention terms. Anthropic first. |
@@ -17,7 +17,7 @@ Locked calls. Edit only deliberately.
 
 ## Product nouns
 
-**Room** · **Member** · **Session** · **Ksana AI** · **Summon** (`@ai`) · **Moment** · **Relay** · **Ksana Recall** (later).
+**Room** · **Member** · **Session** · **Summon AI** · **Summon** (`@ai`) · **Moment** · **Relay** · **Summon Recall** (later).
 
 ## Stack notes
 

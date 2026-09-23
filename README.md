@@ -1,4 +1,4 @@
-# Ksana
+# Summon
 
 Private rooms: end-to-end encrypted chat, video call, and `@ai` — AI only answers when summoned.
 
@@ -7,7 +7,7 @@ Private rooms: end-to-end encrypted chat, video call, and `@ai` — AI only answ
 1. Foundation (monorepo + auth + rooms + E2EE chat loop)
 2. Video call (1:1 first)
 3. Chat polish (join-by-link + host admit, presence UI)
-4. AI summon (`@ai` → answer as Ksana AI)
+4. AI summon (`@ai` → answer as Summon AI)
 5. Responsive (375 / 768 / 1280)
 
 ## Docs
