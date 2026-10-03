@@ -1,11 +1,12 @@
 "use client";
 
 import * as React from "react";
-import type {
-  ReportLine,
-  RosterMember,
-  SignalClientMessage,
-  SignalServerMessage,
+import {
+  MAX_SESSION_PEERS,
+  type ReportLine,
+  type RosterMember,
+  type SignalClientMessage,
+  type SignalServerMessage,
 } from "@summon/core";
 import { getToken, getUser } from "@/lib/auth";
 import { clockTime } from "@/lib/format";
@@ -57,7 +58,7 @@ export function mergeHistory(
 }
 
 export type SessionEvent =
-  | { type: "ready"; userId: string; name: string }
+  | { type: "ready"; userId: string; name: string; maxPeers: number }
   | { type: "error"; code: string; message: string }
   | { type: "session-created"; sessionId: string }
   | { type: "sessions"; sessions: { id: string; memberCount: number }[] }
@@ -124,6 +125,8 @@ export function saveRoomKey(sessionId: string, key: string): void {
 
 export function useSession(onEvent: (event: SessionEvent) => void) {
   const [ready, setReady] = React.useState(false);
+  /** Mesh ceiling advertised by the relay in `ready`; default until then. */
+  const [maxPeers, setMaxPeers] = React.useState(MAX_SESSION_PEERS);
   const wsRef = React.useRef<WebSocket | null>(null);
   const handlerRef = React.useRef(onEvent);
   handlerRef.current = onEvent;
@@ -156,10 +159,16 @@ export function useSession(onEvent: (event: SessionEvent) => void) {
       }
       if (message.type === "ready") {
           setReady(true);
+        setMaxPeers(
+          Number.isSafeInteger(message.maxPeers) && message.maxPeers > 0
+            ? message.maxPeers
+            : MAX_SESSION_PEERS,
+        );
         handlerRef.current({
           type: "ready",
           userId: message.userId,
           name: message.name,
+          maxPeers: message.maxPeers,
         });
         return;
       }
@@ -401,6 +410,7 @@ export function useSession(onEvent: (event: SessionEvent) => void) {
 
   return {
     ready,
+    maxPeers,
     send,
     create,
     listSessions,

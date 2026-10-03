@@ -24,4 +24,11 @@ describe("mesh ceiling", () => {
       expect(canAcceptPeer(count)).toBe(count < MAX_SESSION_PEERS);
     }
   });
+
+  it("follows an advertised ceiling instead of the compiled default", () => {
+    expect(canAcceptPeer(6, 10)).toBe(true);
+    expect(canAcceptPeer(10, 10)).toBe(false);
+    expect(canAcceptPeer(1, 2)).toBe(true);
+    expect(canAcceptPeer(2, 2)).toBe(false);
+  });
 });

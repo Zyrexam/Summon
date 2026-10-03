@@ -3,7 +3,6 @@ import {
   createPostgresRateLimitStore,
   createRateLimiter,
   type HistoryMessage,
-  MAX_SUMMON_CONTEXT_LINES,
   parseClientSignal,
   REPORT_TTL_MS,
   verifyToken,
@@ -38,6 +37,11 @@ import { createAuthHandler } from "./auth-http";
 import { getPool } from "./db";
 import { SessionPersistence } from "./session-persist";
 import { trimSummonContext } from "./ai";
+import {
+  DEFAULT_LIMITS,
+  resolveLimits,
+  type RelayLimits,
+} from "./config";
 
 export type RelayOptions = {
   port: number;
@@ -52,28 +56,22 @@ export type RelayOptions = {
    * set, memory-only otherwise. Pass null to force memory-only.
    */
   persistence?: SessionPersistence | null;
+  /**
+   * Operational limits. Explicit values win, then SUMMON_* environment
+   * variables, then product defaults (see config.ts).
+   */
+  limits?: Partial<RelayLimits>;
 };
 
 /** How long an `ai-answer` requestId may still authorise its room message. */
 export const AI_GRANT_TTL_MS = 2 * 60_000;
 
-/** Provider calls one member may make per minute, across all their sessions. */
-export const SUMMON_LIMIT_PER_MINUTE = 5;
+// Default quotas, kept exported for tests and callers that pin the product
+// defaults. The live values come from resolveLimits() (env-overridable).
+export const SUMMON_LIMIT_PER_MINUTE = DEFAULT_LIMITS.summonPerMinute;
+export const SUMMON_LIMIT_PER_DAY = DEFAULT_LIMITS.summonPerDay;
 const SUMMON_WINDOW_MS = 60_000;
-
-/**
- * Provider calls one member may make per day. Postgres-backed when a database
- * is configured, so restarts do not hand out a fresh budget — this is the
- * credit protection; the per-minute limit only smooths bursts.
- */
-export const SUMMON_LIMIT_PER_DAY = 60;
 const SUMMON_DAY_MS = 86_400_000;
-
-/** Anything longer is bulk extraction, not a chat question. */
-export const SUMMON_MAX_QUESTION_CHARS = 500;
-/** Caps provider tokens per call: most-recent lines win, bodies truncated. */
-export const SUMMON_MAX_CONTEXT_CHARS = 6_000;
-const SUMMON_MAX_LINE_CHARS = 500;
 
 type RtcMessage = Extract<
   SignalClientMessage,
@@ -84,7 +82,11 @@ type RtcMessage = Extract<
 class SessionStore {
   private readonly sessions = new Map<SessionId, SessionRec>();
 
-  constructor(private readonly logger: Logger = defaultLogger) {}
+  constructor(
+    private readonly logger: Logger = defaultLogger,
+    private readonly reportTtlMs: number = REPORT_TTL_MS,
+    private readonly reportCap: number = DEFAULT_LIMITS.historyLimit,
+  ) {}
 
   create(host: RelayMember): SessionRec {
     const session: SessionRec = {
@@ -94,7 +96,7 @@ class SessionStore {
       members: new Map([[host.id, { ...host, host: true, online: true }]]),
       knocks: new Map(),
       peers: new Map(),
-      report: createReportBuffer(),
+      report: createReportBuffer(this.reportCap),
       endedAt: null,
       reportTtl: null,
     };
@@ -126,7 +128,7 @@ class SessionStore {
   ) {
     for (const persisted of sessions) {
       if (this.sessions.has(persisted.id)) continue;
-      const report = createReportBuffer();
+      const report = createReportBuffer(this.reportCap);
       for (const msg of messages.get(persisted.id) ?? []) {
         report.add(
           reportLineFor({
@@ -183,7 +185,7 @@ class SessionStore {
       member.socket = null;
     }
     for (const knock of session.knocks.values()) knock.socket = null;
-    session.reportTtl = setTimeout(() => this.purge(session.id), REPORT_TTL_MS);
+    session.reportTtl = setTimeout(() => this.purge(session.id), this.reportTtlMs);
   }
 
   purge(sessionId: SessionId) {
@@ -268,22 +270,13 @@ class Connection {
    * Provider spend is metered per member: one socket asking `@ai` in a loop
    * would otherwise drain the account for everyone in the room.
    */
-  private readonly summonQuota: RateLimiter = createRateLimiter({
-    limit: SUMMON_LIMIT_PER_MINUTE,
-    windowMs: SUMMON_WINDOW_MS,
-    now: () => this.now(),
-  });
+  private readonly summonQuota: RateLimiter;
   /**
    * Daily credit protection. Postgres-backed when configured so a restart
    * does not hand out a fresh budget; per-socket memory otherwise, same as
    * the per-minute bucket.
    */
-  private readonly summonDaily: RateLimiter = createRateLimiter({
-    limit: SUMMON_LIMIT_PER_DAY,
-    windowMs: SUMMON_DAY_MS,
-    now: () => this.now(),
-    store: process.env.DATABASE_URL ? createPostgresRateLimitStore(getPool()) : undefined,
-  });
+  private readonly summonDaily: RateLimiter;
 
   /** A dead quota store must not take chat AI down with it: log and allow. */
   private async takeQuota(limiter: RateLimiter, key: string, op: string): Promise<boolean> {
@@ -312,7 +305,23 @@ class Connection {
      * half-empty store: `ready` (and everything after it) waits for this.
      */
     private readonly whenReady: Promise<void> = Promise.resolve(),
-  ) {}
+    /** Effective operational limits (env-overridable, see config.ts). */
+    private readonly limits: RelayLimits = DEFAULT_LIMITS,
+  ) {
+    // Assigned here, not as field initializers: those run before parameter
+    // properties are assigned, so reading this.limits there is unsafe.
+    this.summonQuota = createRateLimiter({
+      limit: this.limits.summonPerMinute,
+      windowMs: SUMMON_WINDOW_MS,
+      now: () => this.now(),
+    });
+    this.summonDaily = createRateLimiter({
+      limit: this.limits.summonPerDay,
+      windowMs: SUMMON_DAY_MS,
+      now: () => this.now(),
+      store: process.env.DATABASE_URL ? createPostgresRateLimitStore(getPool()) : undefined,
+    });
+  }
 
   /** Replay missed ciphertext after a rejoin; a no-op without persistence. */
   private sendHistory(sessionId: SessionId, socket: WebSocket) {
@@ -400,7 +409,12 @@ class Connection {
         this.onAuthenticated(verified, this.socket);
         this.userId = verified;
         this.clientName = msg.name;
-        send(this.socket, { type: "ready", userId: verified, name: msg.name });
+        send(this.socket, {
+          type: "ready",
+          userId: verified,
+          name: msg.name,
+          maxPeers: this.limits.maxPeers,
+        });
         for (const pending of this.queue.splice(0, this.queue.length)) {
           this.dispatch(pending);
         }
@@ -561,7 +575,7 @@ class Connection {
     if (!session || !canSend(session, senderId, "host").ok) return;
     const knock = session.knocks.get(visitorId);
     if (!knock) return;
-    if (admit && !hasMemberRoom(session, visitorId)) {
+    if (admit && !hasMemberRoom(session, visitorId, this.limits.maxPeers)) {
       this.logger.warn("admission_refused", { sessionId, visitorId, reason: "full" });
       send(this.socket, { type: "error", code: "full", message: "Session is full" });
       // The visitor is the one left staring at a loading screen otherwise.
@@ -697,13 +711,13 @@ class Connection {
       return;
     }
     const question = msg.question.trim();
-    if (question.length > SUMMON_MAX_QUESTION_CHARS) {
+    if (question.length > this.limits.maxQuestionChars) {
       send(this.socket, {
         type: "ai-error",
         sessionId: session.id,
         requestId: msg.requestId,
         code: "ai-too-long",
-        message: `Keep @ai questions under ${SUMMON_MAX_QUESTION_CHARS} characters`,
+        message: `Keep @ai questions under ${this.limits.maxQuestionChars} characters`,
       });
       return;
     }
@@ -715,9 +729,9 @@ class Connection {
       question,
       context: trimSummonContext(
         msg.context,
-        MAX_SUMMON_CONTEXT_LINES,
-        SUMMON_MAX_LINE_CHARS,
-        SUMMON_MAX_CONTEXT_CHARS,
+        this.limits.maxContextLines,
+        this.limits.maxLineChars,
+        this.limits.maxContextChars,
       ),
     };
     void provider
@@ -774,7 +788,7 @@ class Connection {
       const prev = this.store.live(previous);
       if (prev) leaveRtc(prev, this.rtc.peerId);
     }
-    if (!hasPeerRoom(session, senderId)) {
+    if (!hasPeerRoom(session, senderId, this.limits.maxPeers)) {
       send(this.socket, { type: "error", code: "full", message: "Session is full" });
       return;
     }
@@ -829,7 +843,30 @@ class Connection {
       return;
     }
     if (!session) {
-      send(this.socket, { type: "report", sessionId, lines: [], endedAt: null });
+      // Ended and purged, or lost to a restart: serve metadata from the
+      // database when the caller is a member, nothing otherwise.
+      const persistence = this.persistence;
+      if (!persistence) {
+        send(this.socket, { type: "report", sessionId, lines: [], endedAt: null });
+        return;
+      }
+      void persistence.reportFor(sessionId, senderId).then((report) => {
+        if (!report) {
+          this.logger.warn("report_denied", { sessionId, userId: senderId, code: "forbidden" });
+          send(this.socket, {
+            type: "error",
+            code: "forbidden",
+            message: "You are not a member of this session",
+          });
+          return;
+        }
+        send(this.socket, {
+          type: "report",
+          sessionId,
+          lines: report.lines,
+          endedAt: report.endedAt,
+        });
+      });
       return;
     }
     send(this.socket, {
@@ -912,6 +949,13 @@ export function startRelay(options: RelayOptions) {
   // Better a failed deploy than one where anyone can mint a valid token.
   assertStrongSecret(options.tokenSecret, process.env.NODE_ENV === "production");
   const log = options.logger ?? defaultLogger;
+  // Effective limits: explicit options win, then environment, then product
+  // defaults. Audited once at boot so a misconfigured deploy says so loudly.
+  const { limits, invalid } = resolveLimits(process.env, options.limits);
+  log.info("relay_config", { ...limits });
+  if (invalid.length > 0) {
+    log.warn("relay_config_invalid", { vars: invalid.join(","), note: "defaults apply" });
+  }
   // Auth API owned here so Vercel never touches the database: one pool,
   // in-memory rate limits, zero rate-limit writes.
   const handleAuth = createAuthHandler({
@@ -927,7 +971,7 @@ export function startRelay(options: RelayOptions) {
     options.persistence !== undefined
       ? options.persistence
       : process.env.DATABASE_URL
-        ? new SessionPersistence(getPool(), log)
+        ? new SessionPersistence(getPool(), log, limits.historyLimit)
         : null;
   // Plain http server so free hosts (Render Web Service) have something to
   // health-check. WS upgrades still go to the relay; GET /health is 200.
@@ -962,7 +1006,7 @@ export function startRelay(options: RelayOptions) {
   });
   const wss = new WebSocketServer({ server });
   server.listen(options.port);
-  const store = new SessionStore(log);
+  const store = new SessionStore(log, limits.reportTtlMs, limits.historyLimit);
   // The relay serves new rooms immediately, but no socket acts until the
   // restored sessions are back: `ready` waits on this inside hello().
   const boot = (async () => {
@@ -995,6 +1039,7 @@ export function startRelay(options: RelayOptions) {
       },
       persistence,
       boot,
+      limits,
     );
     socket.on("message", (raw) => connection.onMessage(raw));
     socket.on("close", () => {

@@ -74,14 +74,22 @@ export function canSend(
 }
 
 /** The mesh ceiling applies to every way a socket enters the call. */
-export function hasPeerRoom(session: SessionRec, userId: UserId): boolean {
-  return session.peers.size < MAX_SESSION_PEERS || session.peers.has(userId);
+export function hasPeerRoom(
+  session: SessionRec,
+  userId: UserId,
+  limit: number = MAX_SESSION_PEERS,
+): boolean {
+  return session.peers.size < limit || session.peers.has(userId);
 }
 
 /**
  * Admission has its own ceiling: a host could otherwise admit without limit,
  * since a member does not occupy a mesh slot until they join.
  */
-export function hasMemberRoom(session: SessionRec, userId: UserId): boolean {
-  return session.members.size < MAX_SESSION_PEERS || session.members.has(userId);
+export function hasMemberRoom(
+  session: SessionRec,
+  userId: UserId,
+  limit: number = MAX_SESSION_PEERS,
+): boolean {
+  return session.members.size < limit || session.members.has(userId);
 }

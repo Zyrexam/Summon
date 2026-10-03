@@ -1,9 +1,10 @@
 import { MAX_SESSION_PEERS } from "@summon/core";
 
 /**
- * The relay admits against the same ceiling (MAX_SESSION_PEERS), so the mesh
- * must not hold a second copy of the number where the two can disagree.
+ * Client-side copy of the ceiling the relay advertised in `ready` (which
+ * defaults to MAX_SESSION_PEERS until then). The relay always enforces the
+ * real limit; this only avoids building offers it would refuse.
  */
-export function canAcceptPeer(peerCount: number): boolean {
-  return peerCount < MAX_SESSION_PEERS;
+export function canAcceptPeer(peerCount: number, cap: number = MAX_SESSION_PEERS): boolean {
+  return peerCount < cap;
 }

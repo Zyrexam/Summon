@@ -7,7 +7,7 @@ Create a link, admit who you want, talk. When the call ends you get a short repo
 ## Features
 
 - **End-to-end encrypted chat.** AES-256-GCM per message, bound to `sessionId | msgId | senderId` so nobody can replay someone else's message. The relay sees ciphertext only.
-- **Video for up to 6 people.** WebRTC mesh. Join by link; the host approves each visitor.
+- **Video for up to 6 people by default.** WebRTC mesh, configurable via `SUMMON_MAX_PEERS`. Join by link; the host approves each visitor.
 - **`@ai` answers on demand.** Ask in the chat box, get a reply as Summon AI. It is never a room member and cannot be addressed directly.
 - **Session reports.** Metadata only — who spoke, when — kept two hours after the call, then dropped.
 - **Reload-safe rooms.** Sessions and chat survive reloads and relay restarts. Messages persist as ciphertext only — readable solely by holders of the room key.
@@ -65,7 +65,7 @@ Set on the relay: `DATABASE_URL`, `TOKEN_SECRET`, `GROQ_API_KEY`, `TRUST_PROXY=t
 
 ## Limits
 
-- Up to 6 peers (a full mesh, so this is CPU-bound on a laptop).
+- Up to 6 peers by default (a full mesh, so this is CPU-bound on a laptop) — override with `SUMMON_MAX_PEERS` (2–32); the relay advertises it and clients follow.
 - One device per member — a new login evicts the old one.
 - Sessions live 7 days; `@ai` is capped at 5 calls per member per minute and 60 per member per day, with questions under 500 characters.
 - One shared room key: no forward secrecy, and leaving a room does not revoke it.

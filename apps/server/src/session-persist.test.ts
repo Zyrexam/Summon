@@ -95,6 +95,39 @@ describe("SessionPersistence", () => {
     expect(loaded.sessions).toEqual([]);
   });
 
+  it("reportFor serves members metadata rebuilt from ciphertext", async () => {
+    const at = new Date("2026-10-03T10:00:00Z");
+    const { db } = recordingDb({
+      "SELECT user_id FROM session_members WHERE session_id = $1 AND user_id = $2": [
+        { user_id: "u1" },
+      ],
+      "SELECT ended_at FROM sessions WHERE id = $1": [{ ended_at: at }],
+      "SELECT msg_id, sender_id, sender_name, iv, enc, kind, created_at": [
+        {
+          msg_id: "m1",
+          sender_id: "u1",
+          sender_name: "A",
+          iv: "i",
+          enc: "e",
+          kind: "human",
+          created_at: at,
+        },
+      ],
+    });
+    const report = await new SessionPersistence(db).reportFor("s1", "u1");
+    expect(report?.endedAt).toBe(at.toISOString());
+    expect(report?.lines).toEqual([
+      { senderId: "u1", senderName: "A", msgId: "m1", at: at.toISOString(), kind: "human" },
+    ]);
+  });
+
+  it("reportFor gives strangers nothing", async () => {
+    const { db } = recordingDb({
+      "SELECT user_id FROM session_members WHERE session_id = $1 AND user_id = $2": [],
+    });
+    expect(await new SessionPersistence(db).reportFor("s1", "stranger")).toBeNull();
+  });
+
   it("history maps ai kind through", async () => {
     const { db } = recordingDb({
       "SELECT msg_id, sender_id, sender_name, iv, enc, kind, created_at": [

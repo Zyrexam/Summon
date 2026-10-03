@@ -67,7 +67,7 @@ export type SignalClientMessage =
   | { type: "report"; sessionId: SessionId };
 
 export type SignalServerMessage =
-  | { type: "ready"; userId: UserId; name: string }
+  | { type: "ready"; userId: UserId; name: string; maxPeers: number }
   | { type: "error"; code: string; message: string }
   | { type: "session-created"; sessionId: SessionId }
   | {

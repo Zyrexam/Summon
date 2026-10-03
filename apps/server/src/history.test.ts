@@ -27,6 +27,20 @@ function memoryPersistence(canned: HistoryMessage[] = []) {
     async historyFor() {
       return canned;
     },
+    async reportFor(sessionId: string, userId: string) {
+      const session = sessions.get(sessionId);
+      if (!session || !session.members.has(userId)) return null;
+      return {
+        lines: canned.map((m) => ({
+          senderId: m.from,
+          senderName: m.fromName,
+          msgId: m.msgId,
+          at: m.at,
+          kind: m.kind,
+        })),
+        endedAt: "2026-10-03T10:00:00.000Z",
+      };
+    },
     async loadLive() {
       return {
         sessions: [...sessions.entries()].map(([id, s]) => ({
@@ -198,5 +212,45 @@ describe("session persistence", () => {
     host.send({ type: "create" });
     const created = await host.waitFor((m) => m.type === "session-created");
     expect(created.type).toBe("session-created");
+  });
+
+  it("a purged session still serves its report to members from the database", async () => {
+    const canned: HistoryMessage[] = [
+      {
+        msgId: "m1",
+        iv: "aXY=",
+        enc: "ZGVm",
+        from: "host-1",
+        fromName: "Host",
+        kind: "human",
+        at: "2026-10-03T10:00:00.000Z",
+      },
+    ];
+    const { persistence } = memoryPersistence(canned);
+    const relay = startRelay({ port: 0, tokenSecret: secret, aiProvider: null, persistence });
+    const url = `ws://127.0.0.1:${relay.port()}`;
+    cleanups.push(() => {
+      for (const client of relay.wss.clients) client.terminate();
+      relay.close();
+    });
+    const host = await hello(url, "host-1", "Host");
+    host.send({ type: "create" });
+    const created = await host.waitFor((m) => m.type === "session-created");
+    if (created.type !== "session-created") throw new Error("no session");
+    host.send({ type: "end", sessionId: created.sessionId });
+    await host.waitFor((m) => m.type === "session-ended");
+    relay.store.purge(created.sessionId);
+
+    host.send({ type: "report", sessionId: created.sessionId });
+    const report = await host.waitFor((m) => m.type === "report");
+    if (report.type !== "report") throw new Error("no report");
+    expect(report.lines).toHaveLength(1);
+    expect(report.endedAt).toBe("2026-10-03T10:00:00.000Z");
+
+    const stranger = await hello(url, "stranger-1", "Zed");
+    stranger.send({ type: "report", sessionId: created.sessionId });
+    const denied = await stranger.waitFor((m) => m.type === "error");
+    if (denied.type !== "error") throw new Error("no denial");
+    expect(denied.code).toBe("forbidden");
   });
 });

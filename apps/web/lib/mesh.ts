@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import type { SignalServerMessage } from "@summon/core";
+import { MAX_SESSION_PEERS, type SignalServerMessage } from "@summon/core";
 import { canAcceptPeer } from "./mesh-cap";
 
 export type CallStatus = "idle" | "joining" | "connecting" | "in-call";
@@ -41,6 +41,11 @@ export function useMesh(
     ((message: SignalServerMessage) => void) | null
   >,
 ) {
+  const maxPeersRef = React.useRef(MAX_SESSION_PEERS);
+  /** Follows the ceiling the relay advertised; the relay still enforces it. */
+  const setMaxPeers = React.useCallback((cap: number) => {
+    if (Number.isSafeInteger(cap) && cap > 0) maxPeersRef.current = cap;
+  }, []);
   const [status, setStatus] = React.useState<CallStatus>("idle");
   const [error, setError] = React.useState<string | null>(null);
   const [micOn, setMicOn] = React.useState(true);
@@ -154,7 +159,7 @@ export function useMesh(
       }
 
       if (message.type === "peer-joined") {
-        if (!canAcceptPeer(state.peers.size)) return;
+        if (!canAcceptPeer(state.peers.size, maxPeersRef.current)) return;
         const peer = ensurePeer(message.peerId, false);
         try {
           const offer = await peer.pc.createOffer();
@@ -352,5 +357,6 @@ export function useMesh(
     leave,
     toggleMic,
     toggleCam,
+    setMaxPeers,
   };
 }

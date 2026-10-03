@@ -1,6 +1,7 @@
 import type {
   HistoryMessage,
   Queryable,
+  ReportLine,
   SessionId,
   UserId,
 } from "@summon/core";
@@ -31,6 +32,8 @@ export class SessionPersistence {
   constructor(
     private readonly db: Queryable,
     private readonly logger?: Logger,
+    /** Clamped by config; interpolated into LIMIT, so it must stay an int. */
+    private readonly historyLimit: number = HISTORY_LIMIT,
   ) {}
 
   private fail(op: string, cause: unknown): void {
@@ -97,7 +100,7 @@ export class SessionPersistence {
            SELECT msg_id FROM messages
            WHERE session_id = $1
            ORDER BY created_at DESC
-           LIMIT ${HISTORY_LIMIT}
+           LIMIT ${this.historyLimit}
          )`,
         [sessionId],
       );
@@ -135,7 +138,7 @@ export class SessionPersistence {
         `SELECT msg_id, sender_id, sender_name, iv, enc, kind, created_at
          FROM messages WHERE session_id = $1
          ORDER BY created_at ASC
-         LIMIT ${HISTORY_LIMIT}`,
+         LIMIT ${this.historyLimit}`,
         [sessionId],
       );
       return msgs.rows.map((m) => ({
@@ -150,6 +153,43 @@ export class SessionPersistence {
     } catch (cause) {
       this.fail("history-for", cause);
       return [];
+    }
+  }
+
+  /**
+   * Report for a session the relay no longer holds in memory (ended and
+   * purged, or lost to a restart): metadata rebuilt from ciphertext rows.
+   * Returns null unless `userId` is a member — strangers get nothing.
+   */
+  async reportFor(
+    sessionId: SessionId,
+    userId: UserId,
+  ): Promise<{ lines: ReportLine[]; endedAt: string | null } | null> {
+    try {
+      const member = await this.db.query<{ user_id: string }>(
+        `SELECT user_id FROM session_members WHERE session_id = $1 AND user_id = $2`,
+        [sessionId, userId],
+      );
+      if (member.rows.length === 0) return null;
+      const session = await this.db.query<{ ended_at: Date | null }>(
+        `SELECT ended_at FROM sessions WHERE id = $1`,
+        [sessionId],
+      );
+      const history = await this.historyFor(sessionId);
+      const endedAt = session.rows[0]?.ended_at;
+      return {
+        lines: history.map((m) => ({
+          senderId: m.from,
+          senderName: m.fromName,
+          msgId: m.msgId,
+          at: m.at,
+          kind: m.kind,
+        })),
+        endedAt: endedAt ? new Date(endedAt).toISOString() : null,
+      };
+    } catch (cause) {
+      this.fail("report-for", cause);
+      return null;
     }
   }
 

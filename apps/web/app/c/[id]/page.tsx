@@ -182,6 +182,9 @@ export default function CallPage() {
         if (event.sessionId === sessionId) {
           setPhase("ended");
           mesh.leave();
+          // Guests never sent `end` themselves, so nobody requested their
+          // report yet — without this they stare at an empty ended screen.
+          signalSendRef.current?.({ type: "report", sessionId });
         }
         return;
       }
@@ -309,6 +312,12 @@ export default function CallPage() {
   const session = useSession(handleEvent);
   sendRef.current = session.send as unknown as MeshSend;
   signalSendRef.current = session.send;
+
+  // The relay advertises its mesh ceiling in `ready`; until then the mesh
+  // uses the protocol default. The relay always enforces the real limit.
+  React.useEffect(() => {
+    mesh.setMaxPeers(session.maxPeers);
+  }, [mesh, session.maxPeers]);
 
   const pendingAfterReady = React.useRef<"knock" | "host-open" | null>(null);
 

@@ -10,6 +10,7 @@ import { WebSocket } from "ws";
 import type { AiProvider } from "./ai";
 import { hasPeerRoom, type SessionRec } from "./authz";
 import { startRelay, SUMMON_LIMIT_PER_DAY, SUMMON_LIMIT_PER_MINUTE } from "./index";
+import type { RelayLimits } from "./config";
 import { createReportBuffer, MAX_REPORT_LINES, reportLineFor } from "./report";
 import { createLogger, type Logger } from "./logger";
 
@@ -130,6 +131,7 @@ async function startTestRelay(options?: {
   aiProvider?: AiProvider;
   now?: () => number;
   logger?: Logger;
+  limits?: Partial<RelayLimits>;
 }) {
   const relay = startRelay({
     port: 0,
@@ -137,6 +139,7 @@ async function startTestRelay(options?: {
     aiProvider: options?.aiProvider ?? null,
     now: options?.now,
     logger: options?.logger,
+    limits: options?.limits,
   });
   const port = relay.port();
   const url = `ws://127.0.0.1:${port}`;
@@ -631,6 +634,29 @@ it("P2-3: admission has its own ceiling, not just the mesh", async () => {
   expect(store.get(sessionId)?.members.has("visitor-1")).toBe(false);
 });
 
+it("limits: a custom peer ceiling is enforced and advertised", async () => {
+  const { relay, url } = await startTestRelay({ limits: { maxPeers: 2 } });
+  const host = await connect(url);
+  await host.hello("host-1", "Ada");
+  const sessionId = await host.createSession();
+
+  const guest = await connect(url);
+  await guest.hello("guest-1", "Bob");
+  guest.send({ type: "knock", sessionId });
+  await host.waitFor((m) => m.type === "knock" && m.visitorId === "guest-1");
+  host.send({ type: "admit", sessionId, visitorId: "guest-1" });
+  await guest.waitForType("admitted");
+
+  const extra = await connect(url);
+  await extra.hello("guest-2", "Cy");
+  extra.send({ type: "knock", sessionId });
+  await host.waitFor((m) => m.type === "knock" && m.visitorId === "guest-2");
+  host.send({ type: "admit", sessionId, visitorId: "guest-2" });
+  const full = await host.waitFor((m) => m.type === "error");
+  expect(full.type === "error" && full.code).toBe("full");
+  expect(relay.store.get(sessionId)?.members.has("guest-2")).toBe(false);
+});
+
 it("P1-4: a member cannot drain the provider with repeated summons", async () => {
   let calls = 0;
   const relay = await startTestRelay({
@@ -897,6 +923,8 @@ it("DECISIONS #6: a new login evicts the member's old socket", async () => {
 
   const ready = await second.waitFor((m) => m.type === "ready");
   expect(ready.type === "ready" && ready.userId).toBe("host-1");
+  // The ceiling is advertised, not assumed: clients mesh against this.
+  expect(ready.type === "ready" && ready.maxPeers).toBe(MAX_SESSION_PEERS);
 
   // Authority moves with the login: the new socket still owns the session, so
   // a host-only action succeeds, while the old socket is powerless.
