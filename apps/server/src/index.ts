@@ -118,6 +118,19 @@ class SessionStore {
     this.logger.info("session_purged", { sessionId });
   }
 
+  /** Point a member's membership at the socket that just authenticated. */
+  rebindSocket(userId: UserId, from: WebSocket | null, to: WebSocket) {
+    for (const session of this.sessions.values()) {
+      const member = session.members.get(userId);
+      if (member && member.socket === from) {
+        member.socket = to;
+        member.online = true;
+      }
+      const knock = session.knocks.get(userId);
+      if (knock && knock.socket === from) knock.socket = to;
+    }
+  }
+
   reportLines(session: SessionRec): ReportLine[] {
     return session.report.lines();
   }
@@ -187,12 +200,13 @@ class Connection {
   });
 
   constructor(
-    private readonly socket: WebSocket,
+    readonly socket: WebSocket,
     private readonly store: SessionStore,
     private readonly tokenSecret: string,
     private readonly aiProvider: AiProvider | null,
     private readonly now: () => number = Date.now,
     private readonly logger: Logger = defaultLogger,
+    private readonly onAuthenticated: (userId: UserId, socket: WebSocket) => void,
   ) {}
 
   private get handlers(): Handlers {
@@ -260,6 +274,9 @@ class Connection {
           });
           return;
         }
+        // DECISIONS #6: one device per member. The old socket is told the
+        // account moved before this one is allowed to act.
+        this.onAuthenticated(verified, this.socket);
         this.userId = verified;
         this.clientName = msg.name;
         send(this.socket, { type: "ready", userId: verified, name: msg.name });
@@ -268,6 +285,19 @@ class Connection {
         }
       },
     );
+  }
+
+  /** Tell this socket its account was taken over on another device. */
+  evict() {
+    if (!this.userId) return;
+    this.logger.info("socket_evicted", { userId: this.userId, reason: "session-moved" });
+    send(this.socket, {
+      type: "error",
+      code: "session-moved",
+      message: "Signed in on another device",
+    });
+    this.userId = null;
+    this.joined.clear();
   }
 
   private dispatch(msg: SignalClientMessage) {
@@ -720,6 +750,8 @@ export function startRelay(options: RelayOptions) {
   const log = options.logger ?? defaultLogger;
   const store = new SessionStore(log);
 
+  const live = new Map<UserId, Connection>();
+
   wss.on("connection", (socket) => {
     const connection = new Connection(
       socket,
@@ -728,9 +760,24 @@ export function startRelay(options: RelayOptions) {
       options.aiProvider,
       options.now,
       log,
+      (userId, incoming) => {
+        const previous = live.get(userId);
+        if (previous && previous.socket !== incoming) {
+          previous.evict();
+          // Hand the member record to the new socket, or the returning device
+          // is treated as a stranger in a session it already owns.
+          store.rebindSocket(userId, previous.socket, incoming);
+        }
+        live.set(userId, connection);
+      },
     );
     socket.on("message", (raw) => connection.onMessage(raw));
-    socket.on("close", () => connection.close());
+    socket.on("close", () => {
+      connection.close();
+      if (connection.userId && live.get(connection.userId) === connection) {
+        live.delete(connection.userId);
+      }
+    });
   });
 
   return {

@@ -51,6 +51,10 @@ class TestClient {
     this.socket.send(JSON.stringify(message));
   }
 
+  seenFrames(): SignalServerMessage[] {
+    return [...this.seen];
+  }
+
   /** Resolves with the first frame matching `predicate`, past or future. */
   waitFor<T extends SignalServerMessage>(
     predicate: (m: SignalServerMessage) => m is T,
@@ -66,7 +70,7 @@ class TestClient {
         if (index >= 0) this.waiters.splice(index, 1);
         reject(
           new Error(
-            `timed out waiting for frame; got ${JSON.stringify(this.seen)}`,
+            `timed out(${this.userId}) waiting for frame; got ${JSON.stringify(this.seen)}`,
           ),
         );
       }, timeoutMs);
@@ -782,4 +786,31 @@ it("P5-8: a denied knock is logged, and the report denial too", async () => {
   const names = lines.map((line) => JSON.parse(line) as { event: string }).map((e) => e.event);
   expect(names).toContain("knock_denied");
   expect(names).toContain("report_denied");
+});
+
+it("DECISIONS #6: a new login evicts the member's old socket", async () => {
+  const { url } = await startTestRelay();
+  const first = await connect(url);
+  await first.hello("host-1", "Ada");
+  const sessionId = await first.createSession();
+
+  const second = await connect(url);
+  await second.hello("host-1", "Ada");
+
+  // The old socket is told the account moved, rather than silently lingering.
+  const evicted = await first.waitFor((m) => m.type === "error");
+  expect(evicted.type === "error" && evicted.code).toBe("session-moved");
+
+  const ready = await second.waitFor((m) => m.type === "ready");
+  expect(ready.type === "ready" && ready.userId).toBe("host-1");
+
+  // Authority moves with the login: the new socket still owns the session, so
+  // a host-only action succeeds, while the old socket is powerless.
+  second.send({ type: "end", sessionId });
+  const ended = await second.waitFor((m) => m.type === "session-ended");
+  expect(ended.type).toBe("session-ended");
+
+  first.send({ type: "end", sessionId });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(first.seenFrames().some((m) => m.type === "session-ended")).toBe(false);
 });
