@@ -389,6 +389,14 @@ class Connection {
     if (!knock) return;
     if (admit && !hasMemberRoom(session, visitorId)) {
       send(this.socket, { type: "error", code: "full", message: "Session is full" });
+      // The visitor is the one left staring at a loading screen otherwise.
+      if (knock.socket) {
+        send(knock.socket, {
+          type: "error",
+          code: "full",
+          message: "Session is full",
+        });
+      }
       return;
     }
     session.knocks.delete(visitorId);

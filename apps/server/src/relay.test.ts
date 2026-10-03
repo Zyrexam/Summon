@@ -692,3 +692,35 @@ it("P1-4: one member's spending does not block another's", async () => {
   await guest.waitFor((m) => m.type === "ai-answer" || m.type === "ai-error");
   expect(calls).toBe(before + 1);
 });
+
+it("P2-3: a refused visitor is told the session is full, not left waiting", async () => {
+  const { relay, url } = await startTestRelay();
+  const host = await connect(url);
+  await host.hello("host-1", "Ada");
+  const sessionId = await host.createSession();
+
+  // Fill every membership slot without any of them taking a mesh slot.
+  const session = relay.store.get(sessionId);
+  if (!session) throw new Error("session missing");
+  for (let i = 0; i < MAX_SESSION_PEERS; i += 1) {
+    session.members.set(`guest-${i}`, {
+      id: `guest-${i}`,
+      name: `Guest ${i}`,
+      socket: null,
+      host: false,
+      online: false,
+    });
+  }
+
+  const visitor = await connect(url);
+  await visitor.hello("visitor-1", "Eve");
+  visitor.send({ type: "knock", sessionId });
+  await host.waitFor((m) => m.type === "knock" && m.visitorId === "visitor-1");
+  host.send({ type: "admit", sessionId, visitorId: "visitor-1" });
+
+  const visitorFrame = await visitor.waitFor(
+    (m) => m.type === "error" || m.type === "room-key",
+  );
+  expect(visitorFrame.type).toBe("error");
+  expect(visitorFrame.type === "error" && visitorFrame.code).toBe("full");
+});

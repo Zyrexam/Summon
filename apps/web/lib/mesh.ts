@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import type { SignalServerMessage } from "@summon/core";
+import { canAcceptPeer } from "./mesh-cap";
 
 export type CallStatus = "idle" | "joining" | "connecting" | "in-call";
 
@@ -153,7 +154,7 @@ export function useMesh(
       }
 
       if (message.type === "peer-joined") {
-        if (state.peers.size >= 6) return;
+        if (!canAcceptPeer(state.peers.size)) return;
         const peer = ensurePeer(message.peerId, false);
         try {
           const offer = await peer.pc.createOffer();
