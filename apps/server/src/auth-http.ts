@@ -53,14 +53,34 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+/**
+ * Distinct type, because this failure is the caller's to answer: a rejected
+ * body read that escapes as an unhandled rejection takes the whole relay with
+ * it, and with it every live room.
+ */
+export class BodyTooLargeError extends Error {
+  constructor() {
+    super("request body too large");
+    this.name = "BodyTooLargeError";
+  }
+}
+
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
+    // Declared length first: it answers 413 without reading a byte, which is
+    // the shape every browser and nearly every attacker actually sends.
+    const declared = Number(req.headers["content-length"] ?? 0);
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      reject(new BodyTooLargeError());
+      return;
+    }
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
+      // Backstop for a chunked request that lies about, or omits, its length.
       if (size > MAX_BODY_BYTES) {
-        reject(new Error("body too large"));
+        reject(new BodyTooLargeError());
         req.destroy();
         return;
       }
@@ -125,10 +145,40 @@ export function createAuthHandler(deps: AuthHttpDeps) {
     json(res, failure.status, failure.body);
   };
 
+  /**
+   * A read failure is answered here rather than thrown: `register`/`login`
+   * only wrap their *work* in a try/catch, so anything thrown before that —
+   * an oversized body included — would surface as an unhandled rejection and
+   * kill the process along with every open WebSocket.
+   *
+   * The result is discriminated rather than `null`: a body of literal `null`,
+   * or unparseable JSON, both parse to `null` and must still reach the
+   * validation below instead of being mistaken for "already answered".
+   */
+  type ReadResult =
+    | { ok: true; body: unknown }
+    | { ok: false };
+
+  const readJson = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<ReadResult> => {
+    try {
+      return { ok: true, body: await readBody(req) };
+    } catch (cause) {
+      if (cause instanceof BodyTooLargeError) {
+        json(res, 413, { error: "Body too large" });
+        return { ok: false };
+      }
+      json(res, 400, { error: "Invalid body" });
+      return { ok: false };
+    }
+  };
+
   const register = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const body = (await readBody(req)) as
-      | { email?: string; password?: string; name?: string }
-      | null;
+    const read = await readJson(req, res);
+    if (!read.ok) return;
+    const body = read.body as { email?: string; password?: string; name?: string } | null;
     const email = normalizeEmail(body?.email ?? "");
     const password = body?.password ?? "";
     const name = (body?.name ?? "").trim() || "Guest";
@@ -160,9 +210,9 @@ export function createAuthHandler(deps: AuthHttpDeps) {
   };
 
   const login = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    const body = (await readBody(req)) as
-      | { email?: string; password?: string }
-      | null;
+    const read = await readJson(req, res);
+    if (!read.ok) return;
+    const body = read.body as { email?: string; password?: string } | null;
     const email = normalizeEmail(body?.email ?? "");
     const password = body?.password ?? "";
     if (!email || !password) {

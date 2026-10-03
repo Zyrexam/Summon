@@ -5,6 +5,7 @@ import {
   type SignalServerMessage,
 } from "@summon/core";
 import { afterEach, expect, it } from "vitest";
+import { request } from "node:http";
 import { WebSocket } from "ws";
 import type { AiProvider } from "./ai";
 import { hasPeerRoom, type SessionRec } from "./authz";
@@ -814,3 +815,58 @@ it("DECISIONS #6: a new login evicts the member's old socket", async () => {
   await new Promise((resolve) => setTimeout(resolve, 200));
   expect(first.seenFrames().some((m) => m.type === "session-ended")).toBe(false);
 });
+
+/**
+ * The auth body limit has to be exercised over a real socket, not a request
+ * double: what crashed the relay was an unhandled rejection escaping the http
+ * handler in `startRelay`, which no unit test of `createAuthHandler` can see.
+ * `status: 0` means the server tore the connection down, which is acceptable;
+ * what must never happen is the process going with it.
+ */
+function httpPost(
+  url: string,
+  body: string,
+  headers: Record<string, string> = {},
+): Promise<{ status: number }> {
+  return new Promise((resolve) => {
+    const req = request(url, { method: "POST", headers }, (res) => {
+      res.resume();
+      res.on("end", () => resolve({ status: res.statusCode ?? 0 }));
+    });
+    // A destroyed socket is a refusal, not a relay failure: resolve, don't reject.
+    req.on("error", () => resolve({ status: 0 }));
+    req.end(body);
+  });
+}
+
+it("an oversized auth body cannot take the relay down", async () => {
+  const { url } = await startTestRelay();
+  const http = url.replace(/^ws/, "http");
+  const huge = JSON.stringify({ email: "a@b.com", password: "x".repeat(1_100_000) });
+
+  // Declared length: answered with a real 413 before a byte is read.
+  const declared = await httpPost(`${http}/api/auth/register`, huge, {
+    "content-type": "application/json",
+    "content-length": String(Buffer.byteLength(huge)),
+  });
+  expect(declared.status).toBe(413);
+
+  // No declared length: the streaming backstop fires instead.
+  await httpPost(`${http}/api/auth/login`, huge, { "content-type": "application/json" });
+
+  // The relay is still serving, and still accepts WebSocket rooms.
+  const health = await new Promise<number>((resolve) => {
+    const req = request(`${http}/health`, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode ?? 0));
+    });
+    req.on("error", () => resolve(0));
+    req.end();
+  });
+  expect(health).toBe(200);
+
+  const host = await connect(url);
+  await host.hello("host-1", "Ada");
+  expect(await host.createSession()).toMatch(/^[0-9a-f-]{36}$/);
+  host.close();
+}, 15_000);

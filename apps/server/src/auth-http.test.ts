@@ -66,7 +66,98 @@ function post(
   });
 }
 
+/** Minimal ServerResponse double that records the status written. */
+function fakeRes() {
+  const state: { status?: number; body?: unknown } = {};
+  const res = {
+    setHeader() {},
+    writeHead(status: number) {
+      state.status = status;
+    },
+    end(text?: string) {
+      state.body = text ? JSON.parse(text) : undefined;
+    },
+    destroy() {},
+  } as unknown as ServerResponse;
+  return {
+    res,
+    state,
+    get status() {
+      return state.status ?? 200;
+    },
+  };
+}
+
+/**
+ * Replaces `on` with a recorder. Must run *before* the handler is invoked:
+ * `readBody` attaches its listeners synchronously, and by then it needs to be
+ * talking to the recorder rather than a real stream that will never emit.
+ */
+function stub(req: IncomingMessage) {
+  const listeners: {
+    data: ((chunk: Buffer) => void) | null;
+    end: (() => void) | null;
+  } = { data: null, end: null };
+  req.on = ((event: string, listener: (...args: never[]) => void) => {
+    if (event === "data") listeners.data = listener as (chunk: Buffer) => void;
+    if (event === "end") listeners.end = listener as () => void;
+    return req;
+  }) as IncomingMessage["on"];
+  return listeners;
+}
+
+/**
+ * Pushes a raw body through a stubbed request. Returns false when the handler
+ * refused the body outright (no `end` listener was ever attached), which is
+ * how the oversized case is told apart from a body that was actually read.
+ */
+function feed(
+  req: IncomingMessage,
+  listeners: { data: ((chunk: Buffer) => void) | null; end: (() => void) | null },
+  payload: Buffer,
+): boolean {
+  listeners.data?.(payload);
+  listeners.end?.();
+  return listeners.end !== null;
+}
+
 describe("backend auth API", () => {
+  it("rejects an oversized declared body with 413, not an exception", async () => {
+    const db = fakeDb();
+    const handler = createAuthHandler({ getDb: () => db, tokenSecret: SECRET });
+    const req = new IncomingMessage(new Socket());
+    req.method = "POST";
+    req.url = "/api/auth/register";
+    req.headers = { "content-length": String(2_000_000) };
+    const res = fakeRes();
+    expect(await handler(req, res.res)).toBe(true);
+    expect(res.status).toBe(413);
+    // Nothing reached the database: the body was refused before any work.
+    expect(db.users.size).toBe(0);
+  });
+
+  it("a null or unparseable body is answered, never left hanging", async () => {
+    const handler = createAuthHandler({
+      getDb: () => fakeDb(),
+      tokenSecret: SECRET,
+    });
+    for (const raw of ["null", "not json at all"]) {
+      const res = fakeRes();
+      const req = new IncomingMessage(new Socket());
+      req.method = "POST";
+      req.url = "/api/auth/login";
+      req.headers = { "content-length": String(raw.length) };
+      const listeners = stub(req);
+      // The handler blocks on the body, so invoke it, feed, then await.
+      const handled = handler(req, res.res);
+      // The body was read (not refused up front) and still produced a reply.
+      expect(feed(req, listeners, Buffer.from(raw))).toBe(true);
+      expect(await handled).toBe(true);
+      // Reaches validation rather than returning early on a null sentinel.
+      expect([400, 401]).toContain(res.status);
+    }
+  });
+
   it("register then login round-trips a verifiable token", async () => {
     const db = fakeDb();
     const handler = createAuthHandler({

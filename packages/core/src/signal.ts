@@ -19,6 +19,21 @@ export type RosterMember = {
   host: boolean;
 };
 
+/**
+ * One persisted chat message. Ciphertext only (iv/enc): replayable after a
+ * reload or relay restart, readable only by holders of the room key.
+ */
+export type HistoryMessage = {
+  msgId: string;
+  iv: string;
+  enc: string;
+  from: UserId;
+  fromName: string;
+  kind: "human" | "ai";
+  /** Server timestamp, ISO string. */
+  at: string;
+};
+
 export type SignalClientMessage =
   | { type: "hello"; token: string; name: string; clientId?: string }
   | { type: "create" }
@@ -86,6 +101,11 @@ export type SignalServerMessage =
       kind?: "human" | "ai";
     }
   | { type: "roster"; sessionId: SessionId; members: RosterMember[] }
+  | {
+      type: "history";
+      sessionId: SessionId;
+      messages: HistoryMessage[];
+    }
   | {
       type: "ai-answer";
       sessionId: SessionId;

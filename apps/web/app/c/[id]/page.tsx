@@ -35,6 +35,7 @@ import { useMesh, type MeshSend, type PeerView } from "@/lib/mesh";
 import {
   useSession,
   loadRoomKey,
+  mergeHistory,
   saveRoomKey,
   type SessionEvent,
   type SessionMessage,
@@ -217,6 +218,11 @@ export default function CallPage() {
         setMessages((prev) =>
           prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
         );
+        return;
+      }
+      if (event.type === "history") {
+        if (event.sessionId !== sessionId) return;
+        setMessages((prev) => mergeHistory(prev, event.messages));
         return;
       }
       if (event.type === "ai-answer") {

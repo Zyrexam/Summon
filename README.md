@@ -10,7 +10,7 @@ Create a link, admit who you want, talk. When the call ends you get a short repo
 - **Video for up to 6 people.** WebRTC mesh. Join by link; the host approves each visitor.
 - **`@ai` answers on demand.** Ask in the chat box, get a reply as Summon AI. It is never a room member and cannot be addressed directly.
 - **Session reports.** Metadata only — who spoke, when — kept two hours after the call, then dropped.
-- **Nothing persists.** No stored messages, no message rows in the database.
+- **Reload-safe rooms.** Sessions and chat survive reloads and relay restarts. Messages persist as ciphertext only — readable solely by holders of the room key.
 
 ## Setup
 
@@ -72,6 +72,6 @@ Set on the relay: `DATABASE_URL`, `TOKEN_SECRET`, `GROQ_API_KEY`, `TRUST_PROXY=t
 
 ## Notes
 
-- `apps/server` is a `ws` relay plus the auth API (`POST /api/auth/login|register`). It authenticates, brokers WebRTC signalling, and keeps a session in memory. It stores no messages.
-- The database holds users and nothing else. Rate limits are in-memory on the relay.
+- `apps/server` is a `ws` relay plus the auth API (`POST /api/auth/login|register`). It authenticates, brokers WebRTC signalling, and keeps live sessions in memory with a Postgres back-up. It stores message ciphertext only — never plaintext.
+- Postgres holds users, sessions, membership, and message ciphertext. Plaintext never leaves the browsers.
 - Logs are one JSON object per line, with tokens and keys redacted.

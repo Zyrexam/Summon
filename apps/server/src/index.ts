@@ -1,6 +1,7 @@
 import {
   assertStrongSecret,
   createRateLimiter,
+  type HistoryMessage,
   MAX_SUMMON_CONTEXT_LINES,
   parseClientSignal,
   REPORT_TTL_MS,
@@ -34,6 +35,7 @@ import {
 } from "./ai";
 import { createAuthHandler } from "./auth-http";
 import { getPool } from "./db";
+import { SessionPersistence } from "./session-persist";
 
 export type RelayOptions = {
   port: number;
@@ -43,6 +45,11 @@ export type RelayOptions = {
   logger?: Logger;
   /** Behind Render, forwarding headers identify the client. */
   trustProxy?: boolean;
+  /**
+   * Session/chat persistence. Defaults to the database when DATABASE_URL is
+   * set, memory-only otherwise. Pass null to force memory-only.
+   */
+  persistence?: SessionPersistence | null;
 };
 
 /** How long an `ai-answer` requestId may still authorise its room message. */
@@ -91,6 +98,52 @@ class SessionStore {
 
   all(): SessionRec[] {
     return [...this.sessions.values()];
+  }
+
+  /**
+   * Rebuild live sessions from the database after a restart. Sockets start
+   * detached: members reattach with knock/host-open and get history replayed.
+   */
+  restore(
+    sessions: { id: SessionId; hostId: UserId; members: { id: UserId; name: string; host: boolean }[] }[],
+    messages: Map<SessionId, HistoryMessage[]>,
+  ) {
+    for (const persisted of sessions) {
+      if (this.sessions.has(persisted.id)) continue;
+      const report = createReportBuffer();
+      for (const msg of messages.get(persisted.id) ?? []) {
+        report.add(
+          reportLineFor({
+            senderId: msg.from,
+            senderName: msg.fromName,
+            msgId: msg.msgId,
+            kind: msg.kind,
+            at: msg.at,
+          }),
+        );
+      }
+      const members = new Map<UserId, RelayMember>();
+      for (const m of persisted.members) {
+        members.set(m.id, {
+          id: m.id,
+          name: m.name,
+          socket: null,
+          online: false,
+          host: m.host,
+        });
+      }
+      this.sessions.set(persisted.id, {
+        id: persisted.id,
+        hostId: persisted.hostId,
+        status: "live",
+        members,
+        knocks: new Map(),
+        peers: new Map(),
+        report,
+        endedAt: null,
+        reportTtl: null,
+      });
+    }
   }
 
   /** Ended sessions stay readable for the report TTL, then drop out. */
@@ -213,7 +266,19 @@ class Connection {
     private readonly now: () => number = Date.now,
     private readonly logger: Logger = defaultLogger,
     private readonly onAuthenticated: (userId: UserId, socket: WebSocket) => void,
+    private readonly persistence: SessionPersistence | null = null,
   ) {}
+
+  /** Replay missed ciphertext after a rejoin; a no-op without persistence. */
+  private sendHistory(sessionId: SessionId, socket: WebSocket) {
+    const persistence = this.persistence;
+    if (!persistence) return;
+    void persistence.historyFor(sessionId).then((messages) => {
+      if (messages.length > 0) {
+        send(socket, { type: "history", sessionId, messages });
+      }
+    });
+  }
 
   private get handlers(): Handlers {
     return {
@@ -328,6 +393,7 @@ class Connection {
     });
     this.joined.add(session.id);
     this.logger.info("session_created", { sessionId: session.id, hostId: senderId });
+    void this.persistence?.saveSession(session.id, senderId, this.clientName || "Host");
     send(this.socket, { type: "session-created", sessionId: session.id });
     send(this.socket, {
       type: "roster",
@@ -397,6 +463,7 @@ class Connection {
       });
     }
     broadcastRoster(existing);
+    this.sendHistory(existing.id, this.socket);
   }
 
   private onKnock(sessionId: SessionId) {
@@ -417,6 +484,7 @@ class Connection {
       this.joined.add(session.id);
       send(this.socket, { type: "admitted", sessionId: session.id });
       broadcastRoster(session);
+      this.sendHistory(session.id, this.socket);
       return;
     }
     const name = this.clientName || "Visitor";
@@ -473,8 +541,10 @@ class Connection {
       online: Boolean(knock.socket),
       host: false,
     });
+    void this.persistence?.saveMember(session.id, visitorId, knock.name, false);
     if (knock.socket) {
       send(knock.socket, { type: "admitted", sessionId: session.id });
+      this.sendHistory(session.id, knock.socket);
     }
     broadcastRoster(session);
   }
@@ -507,6 +577,15 @@ class Connection {
         kind,
       }),
     );
+    // Ciphertext only: the database replays history, never reads it.
+    void this.persistence?.saveMessage(session.id, {
+      msgId: msg.msgId,
+      senderId,
+      senderName: sender.name,
+      iv: msg.iv,
+      enc: msg.enc,
+      kind,
+    });
     const out: SignalServerMessage = {
       type: "room-msg",
       sessionId: session.id,
@@ -662,6 +741,7 @@ class Connection {
     if (!session || session.status !== "live") return;
     if (!canSend(session, senderId, "host").ok) return;
     this.store.end(session);
+    void this.persistence?.endSession(sessionId);
   }
 
   private onReport(sessionId: SessionId) {
@@ -766,6 +846,14 @@ export function startRelay(options: RelayOptions) {
       options.trustProxy ?? process.env.TRUST_PROXY === "true",
     logger: log,
   });
+  // Sessions and ciphertext survive restarts when a database is configured;
+  // without one the relay is memory-only, exactly as before.
+  const persistence =
+    options.persistence !== undefined
+      ? options.persistence
+      : process.env.DATABASE_URL
+        ? new SessionPersistence(getPool(), log)
+        : null;
   // Plain http server so free hosts (Render Web Service) have something to
   // health-check. WS upgrades still go to the relay; GET /health is 200.
   const server: Server = createServer((req, res) => {
@@ -774,15 +862,41 @@ export function startRelay(options: RelayOptions) {
       res.end("ok");
       return;
     }
-    void handleAuth(req, res).then((handled) => {
-      if (handled) return;
-      res.writeHead(426, { "content-type": "text/plain" });
-      res.end("Upgrade Required");
-    });
+    // The catch is the point: a rejected auth handler is a failed request,
+    // never a reason to exit. Without it an unhandled rejection takes down
+    // every live room on the relay with it.
+    void handleAuth(req, res)
+      .then((handled) => {
+        if (handled) return;
+        res.writeHead(426, { "content-type": "text/plain" });
+        res.end("Upgrade Required");
+      })
+      .catch((cause: unknown) => {
+        log.warn("auth_request_failed", {
+          method: req.method,
+          url: req.url,
+          reason: cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause),
+        });
+        if (!res.headersSent) {
+          res.writeHead(500, { "content-type": "text/plain" });
+          res.end("Internal Server Error");
+        } else {
+          res.destroy();
+        }
+      });
   });
   const wss = new WebSocketServer({ server });
   server.listen(options.port);
   const store = new SessionStore(log);
+  if (persistence) {
+    // Async on purpose: the relay serves new rooms immediately and backfills
+    // restored ones when the database answers.
+    void persistence.loadLive().then(({ sessions, messages }) => {
+      if (sessions.length === 0) return;
+      store.restore(sessions, messages);
+      log.info("sessions_restored", { count: sessions.length });
+    });
+  }
 
   const live = new Map<UserId, Connection>();
 
@@ -804,6 +918,7 @@ export function startRelay(options: RelayOptions) {
         }
         live.set(userId, connection);
       },
+      persistence,
     );
     socket.on("message", (raw) => connection.onMessage(raw));
     socket.on("close", () => {

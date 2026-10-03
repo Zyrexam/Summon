@@ -32,6 +32,30 @@ export type SessionMessage = {
   you?: boolean;
 };
 
+/**
+ * Merge replayed history under live messages: history arrives oldest-first
+ * and may overlap messages already received live, so live order wins and
+ * duplicates collapse by id.
+ */
+export function mergeHistory(
+  prev: SessionMessage[],
+  incoming: SessionMessage[],
+): SessionMessage[] {
+  if (incoming.length === 0) return prev;
+  const incomingIds = new Set(incoming.map((m) => m.id));
+  const liveOnly = prev.filter((m) => !incomingIds.has(m.id));
+  const seen = new Set<string>();
+  const ordered = [...incoming, ...liveOnly].filter((m) => {
+    if (seen.has(m.id)) return false;
+    seen.add(m.id);
+    return true;
+  });
+  if (ordered.length === prev.length && ordered.every((m, i) => m === prev[i])) {
+    return prev;
+  }
+  return ordered;
+}
+
 export type SessionEvent =
   | { type: "ready"; userId: string; name: string }
   | { type: "error"; code: string; message: string }
@@ -42,6 +66,7 @@ export type SessionEvent =
   | { type: "denied"; sessionId: string }
   | { type: "room-key"; sessionId: string; key: string }
   | { type: "room-msg"; message: SessionMessage }
+  | { type: "history"; sessionId: string; messages: SessionMessage[] }
   | { type: "ai-answer"; sessionId: string; requestId: string; answer: string }
   | {
       type: "ai-error";
@@ -212,6 +237,35 @@ export function useSession(onEvent: (event: SessionEvent) => void) {
               you: message.from === user?.id,
             },
           });
+        });
+        return;
+      }
+      if (message.type === "history") {
+        const user = getUser();
+        const key = loadRoomKey(message.sessionId);
+        void Promise.all(
+          message.messages.map((item) =>
+            readRoomMessage({
+              key,
+              iv: item.iv,
+              enc: item.enc,
+              sessionId: message.sessionId,
+              msgId: item.msgId,
+              senderId: item.from,
+            }).then(({ body, readable }) => ({
+              id: item.msgId,
+              sessionId: message.sessionId,
+              from: item.from,
+              fromName: item.fromName,
+              body,
+              readable,
+              kind: item.kind === "ai" ? ("ai" as const) : ("human" as const),
+              time: clockTime(item.at),
+              you: item.from === user?.id,
+            })),
+          ),
+        ).then((messages) => {
+          handlerRef.current({ type: "history", sessionId: message.sessionId, messages });
         });
         return;
       }

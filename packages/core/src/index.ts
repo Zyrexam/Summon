@@ -1,5 +1,6 @@
 export const name = "summon";
 export type {
+  HistoryMessage,
   IceCandidateLike,
   RosterMember,
   SignalClientMessage,
