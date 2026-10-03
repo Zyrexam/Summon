@@ -1,4 +1,5 @@
 import {
+  assertStrongSecret,
   createRateLimiter,
   MAX_SUMMON_CONTEXT_LINES,
   parseClientSignal,
@@ -13,6 +14,7 @@ import {
   type UserId,
 } from "@summon/core";
 import { randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
 import { pathToFileURL } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -748,7 +750,21 @@ type Handlers = {
 };
 
 export function startRelay(options: RelayOptions) {
-  const wss = new WebSocketServer({ port: options.port });
+  // Better a failed deploy than one where anyone can mint a valid token.
+  assertStrongSecret(options.tokenSecret, process.env.NODE_ENV === "production");
+  // Plain http server so free hosts (Render Web Service) have something to
+  // health-check. WS upgrades still go to the relay; GET /health is 200.
+  const server: Server = createServer((req, res) => {
+    if (req.url === "/health") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("ok");
+      return;
+    }
+    res.writeHead(426, { "content-type": "text/plain" });
+    res.end("Upgrade Required");
+  });
+  const wss = new WebSocketServer({ server });
+  server.listen(options.port);
   const log = options.logger ?? defaultLogger;
   const store = new SessionStore(log);
 
@@ -784,9 +800,13 @@ export function startRelay(options: RelayOptions) {
 
   return {
     wss,
+    server,
     store,
+    close: (done?: () => void) => {
+      wss.close(() => server.close(done));
+    },
     port: () => {
-      const address = wss.address();
+      const address = server.address();
       return typeof address === "object" && address ? address.port : options.port;
     },
   };

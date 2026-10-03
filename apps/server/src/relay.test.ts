@@ -141,7 +141,7 @@ async function startTestRelay(options?: {
   const url = `ws://127.0.0.1:${port}`;
   cleanups.push(() => {
     for (const client of relay.wss.clients) client.terminate();
-    relay.wss.close();
+    relay.close();
   });
   return { relay, url };
 }
