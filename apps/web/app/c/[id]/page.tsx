@@ -43,7 +43,7 @@ import { clockTime, initials } from "@/lib/format";
 import { createRoomKeyStore } from "@/lib/room-key";
 import { senderRows } from "@/lib/chat-rows";
 import { summonContextLines } from "@/lib/summon-context";
-import { reportFileName, reportStateFrom, type ReportState } from "@/lib/report";
+import { reportStateFrom, type ReportState } from "@/lib/report";
 import type {
   RosterMember,
   SignalClientMessage,

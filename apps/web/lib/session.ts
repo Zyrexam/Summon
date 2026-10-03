@@ -54,6 +54,33 @@ export type SessionEvent =
   | { type: "report"; sessionId: string; lines: ReportLine[]; endedAt: string | null }
   | { type: "signal"; message: SignalServerMessage };
 
+/**
+ * Frames that reach the mesh hook untouched instead of becoming first-class
+ * events. Naming them here is what lets the assertion below fail loudly when
+ * the wire protocol grows a frame nobody has routed yet.
+ */
+export const SIGNAL_PASSTHROUGH = [
+  "peers",
+  "peer-joined",
+  "peer-left",
+  "rtc-offer",
+  "rtc-answer",
+  "rtc-ice",
+] as const satisfies readonly SignalServerMessage["type"][];
+
+type Passthrough = (typeof SIGNAL_PASSTHROUGH)[number];
+type Unrouted = Exclude<SignalServerMessage["type"], Passthrough>;
+
+/**
+ * Enforced by `tsc`, not by a test: adding a frame to the wire protocol
+ * without giving it an event here is a compile error, instead of a message
+ * that silently vanishes into the mesh hook.
+ */
+const _everyFrameIsRouted: Exclude<Unrouted, SessionEvent["type"]> extends never
+  ? true
+  : { missing: Exclude<Unrouted, SessionEvent["type"]> } = true;
+void _everyFrameIsRouted;
+
 function roomKeyStorage(sessionId: string): string {
   return `summon.roomKey.${sessionId}`;
 }
@@ -73,7 +100,6 @@ export function useSession(onEvent: (event: SessionEvent) => void) {
   const wsRef = React.useRef<WebSocket | null>(null);
   const handlerRef = React.useRef(onEvent);
   handlerRef.current = onEvent;
-  const helloRef = React.useRef(false);
 
   React.useEffect(() => {
     const token = getToken();
@@ -102,8 +128,7 @@ export function useSession(onEvent: (event: SessionEvent) => void) {
         return;
       }
       if (message.type === "ready") {
-        helloRef.current = true;
-        setReady(true);
+          setReady(true);
         handlerRef.current({
           type: "ready",
           userId: message.userId,
@@ -236,7 +261,6 @@ export function useSession(onEvent: (event: SessionEvent) => void) {
     ws.onclose = () => {
       if (wsRef.current !== ws) return;
       setReady(false);
-      helloRef.current = false;
       wsRef.current = null;
     };
 
@@ -244,7 +268,6 @@ export function useSession(onEvent: (event: SessionEvent) => void) {
       ws.close();
       if (wsRef.current !== ws) return;
       wsRef.current = null;
-      helloRef.current = false;
       setReady(false);
     };
   }, []);

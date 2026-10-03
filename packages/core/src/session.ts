@@ -11,12 +11,6 @@ export type ReportLine = {
   kind: "human" | "ai";
 };
 
-export type SessionMember = {
-  id: UserId;
-  name: string;
-  host: boolean;
-};
-
 export const REPORT_TTL_MS = 2 * 60 * 60 * 1000;
 export const MAX_SESSION_PEERS = 6;
 

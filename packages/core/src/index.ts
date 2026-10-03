@@ -9,8 +9,6 @@ export { parseClientSignal } from "./signal";
 export type {
   ReportLine,
   SessionId,
-  SessionMember,
-  SessionStatus,
   SummonContextLine,
   UserId,
 } from "./session";

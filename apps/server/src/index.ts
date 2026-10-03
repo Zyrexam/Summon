@@ -20,7 +20,7 @@ import {
   canSend,
   hasMemberRoom,
   hasPeerRoom,
-  type MemberRec,
+  type RelayMember,
   type SessionRec,
 } from "./authz";
 import { createReportBuffer, reportLineFor } from "./report";
@@ -53,7 +53,7 @@ type RtcMessage = Extract<
 class SessionStore {
   private readonly sessions = new Map<SessionId, SessionRec>();
 
-  create(host: MemberRec): SessionRec {
+  create(host: RelayMember): SessionRec {
     const session: SessionRec = {
       id: randomUUID(),
       hostId: host.id,

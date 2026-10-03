@@ -2,7 +2,7 @@ import { MAX_SESSION_PEERS, type SessionId, type UserId } from "@summon/core";
 import type { WebSocket } from "ws";
 import type { ReportBuffer } from "./report";
 
-export type MemberRec = {
+export type RelayMember = {
   id: UserId;
   name: string;
   socket: WebSocket | null;
@@ -14,8 +14,8 @@ export type SessionRec = {
   id: SessionId;
   hostId: UserId;
   status: "live" | "ended";
-  members: Map<UserId, MemberRec>;
-  knocks: Map<UserId, MemberRec>;
+  members: Map<UserId, RelayMember>;
+  knocks: Map<UserId, RelayMember>;
   peers: Map<UserId, WebSocket>;
   report: ReportBuffer;
   endedAt: number | null;
