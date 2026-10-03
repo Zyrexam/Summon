@@ -8,7 +8,7 @@ import { afterEach, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import type { AiProvider } from "./ai";
 import { hasPeerRoom, type SessionRec } from "./authz";
-import { startRelay } from "./index";
+import { startRelay, SUMMON_LIMIT_PER_MINUTE } from "./index";
 import { createReportBuffer, MAX_REPORT_LINES, reportLineFor } from "./report";
 
 const secret = "test-secret";
@@ -621,4 +621,74 @@ it("P2-3: admission has its own ceiling, not just the mesh", async () => {
   const reply = await host.waitFor((m) => m.type === "error");
   expect(reply.type === "error" && reply.code).toBe("full");
   expect(store.get(sessionId)?.members.has("visitor-1")).toBe(false);
+});
+
+it("P1-4: a member cannot drain the provider with repeated summons", async () => {
+  let calls = 0;
+  const relay = await startTestRelay({
+    aiProvider: {
+      name: "counting",
+      complete: () => {
+        calls += 1;
+        return Promise.resolve("short answer");
+      },
+    },
+  });
+  const host = await connect(relay.url);
+  await host.hello("host-1", "Ada");
+  const sessionId = await host.createSession();
+
+  for (let i = 0; i < 12; i += 1) {
+    host.send({
+      type: "summon",
+      sessionId,
+      requestId: `req-${i}`,
+      question: "what did we agree?",
+      context: [],
+    });
+  }
+
+  const limited = await host.waitFor(
+    (m) => m.type === "ai-error" && m.code === "ai-rate-limited",
+  );
+  expect(limited.type).toBe("ai-error");
+  expect(calls).toBeLessThanOrEqual(SUMMON_LIMIT_PER_MINUTE);
+});
+
+it("P1-4: one member's spending does not block another's", async () => {
+  let calls = 0;
+  const relay = await startTestRelay({
+    aiProvider: {
+      name: "counting",
+      complete: () => {
+        calls += 1;
+        return Promise.resolve("answer");
+      },
+    },
+  });
+  const host = await connect(relay.url);
+  await host.hello("host-1", "Ada");
+  const sessionId = await host.createSession();
+  const guest = await connect(relay.url);
+  await guest.hello("guest-1", "Bob");
+  guest.send({ type: "knock", sessionId });
+  await host.waitFor((m) => m.type === "knock" && m.visitorId === "guest-1");
+  host.send({ type: "admit", sessionId, visitorId: "guest-1" });
+  await guest.waitForType("admitted");
+
+  for (let i = 0; i < 12; i += 1) {
+    host.send({
+      type: "summon",
+      sessionId,
+      requestId: `h-${i}`,
+      question: "q",
+      context: [],
+    });
+  }
+  await host.waitFor((m) => m.type === "ai-error" && m.code === "ai-rate-limited");
+
+  const before = calls;
+  guest.send({ type: "summon", sessionId, requestId: "g-1", question: "q", context: [] });
+  await guest.waitFor((m) => m.type === "ai-answer" || m.type === "ai-error");
+  expect(calls).toBe(before + 1);
 });

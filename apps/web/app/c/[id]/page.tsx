@@ -42,6 +42,7 @@ import {
 import { clockTime, initials } from "@/lib/format";
 import { createRoomKeyStore } from "@/lib/room-key";
 import { senderRows } from "@/lib/chat-rows";
+import { summonContextLines } from "@/lib/summon-context";
 import { reportFileName, reportStateFrom, type ReportState } from "@/lib/report";
 import type {
   RosterMember,
@@ -375,10 +376,7 @@ export default function CallPage() {
         sessionId,
         requestId: `s-${Date.now()}`,
         question,
-        context: messagesRef.current
-          .slice(-SUMMON_CONTEXT_LINES)
-          .filter((m) => m.body.trim().length > 0)
-          .map((m) => ({ name: m.you ? "You" : m.fromName, body: m.body })),
+        context: summonContextLines(messagesRef.current, SUMMON_CONTEXT_LINES),
       });
       return;
     }

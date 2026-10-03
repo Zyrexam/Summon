@@ -1,4 +1,5 @@
 import {
+  createRateLimiter,
   MAX_SUMMON_CONTEXT_LINES,
   parseClientSignal,
   REPORT_TTL_MS,
@@ -7,6 +8,7 @@ import {
   type RosterMember,
   type SessionId,
   type SignalClientMessage,
+  type RateLimiter,
   type SignalServerMessage,
   type UserId,
 } from "@summon/core";
@@ -37,6 +39,10 @@ export type RelayOptions = {
 
 /** How long an `ai-answer` requestId may still authorise its room message. */
 export const AI_GRANT_TTL_MS = 2 * 60_000;
+
+/** Provider calls one member may make per minute, across all their sessions. */
+export const SUMMON_LIMIT_PER_MINUTE = 5;
+const SUMMON_WINDOW_MS = 60_000;
 
 type RtcMessage = Extract<
   SignalClientMessage,
@@ -159,6 +165,15 @@ class Connection {
    * the only ticket to an ember sender.
    */
   private readonly aiGrants = new Map<string, number>();
+  /**
+   * Provider spend is metered per member: one socket asking `@ai` in a loop
+   * would otherwise drain the account for everyone in the room.
+   */
+  private readonly summonQuota: RateLimiter = createRateLimiter({
+    limit: SUMMON_LIMIT_PER_MINUTE,
+    windowMs: SUMMON_WINDOW_MS,
+    now: () => this.now(),
+  });
 
   constructor(
     private readonly socket: WebSocket,
@@ -453,6 +468,16 @@ class Connection {
       return;
     }
     if (!canSend(session, senderId, "member").ok) return;
+    if (!this.summonQuota.take(`user:${senderId}`)) {
+      send(this.socket, {
+        type: "ai-error",
+        sessionId: session.id,
+        requestId: msg.requestId,
+        code: "ai-rate-limited",
+        message: "Summon AI is answering too often, try again shortly",
+      });
+      return;
+    }
     const provider = this.aiProvider;
     if (!provider) {
       send(this.socket, {
