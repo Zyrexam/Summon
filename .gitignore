@@ -7,3 +7,8 @@ coverage/
 .env.local
 .DS_Store
 *.tsbuildinfo
+.impeccable
+.scratch
+DESIGN.md
+scripts/shots/
+.claude/

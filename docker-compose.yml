@@ -1,0 +1,21 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: summon-postgres
+    environment:
+      POSTGRES_USER: summon
+      POSTGRES_PASSWORD: summon
+      POSTGRES_DB: summon
+    ports:
+      - "5432:5432"
+    volumes:
+      - summon-pgdata:/var/lib/postgresql/data
+      - ./apps/server/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U summon -d summon"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  summon-pgdata:
