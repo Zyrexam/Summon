@@ -34,15 +34,20 @@ describe("summon context", () => {
     expect(lines).toEqual([{ name: "Bob", body: "fine" }]);
   });
 
-  it("never sends Summon AI's own answers back", () => {
+  it("labels Summon AI's own answers so follow-ups resolve", () => {
     const lines = summonContextLines(
       [
-        message({ id: "a", body: "human line", readable: true }),
-        message({ id: "b", body: "an earlier answer", kind: "ai", readable: true }),
+        message({ id: "a", body: "restaurants in Kyoto?", readable: true }),
+        message({ id: "b", body: "Gion Karyo", kind: "ai", readable: true }),
+        message({ id: "c", body: "and nearby hotels?", readable: true }),
       ],
       15,
     );
-    expect(lines.map((l) => l.body)).toEqual(["human line"]);
+    expect(lines).toEqual([
+      { name: "Bob", body: "restaurants in Kyoto?" },
+      { name: "Summon AI", body: "Gion Karyo" },
+      { name: "Bob", body: "and nearby hotels?" },
+    ]);
   });
 
   it("labels your own lines as You", () => {

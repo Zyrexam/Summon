@@ -9,7 +9,7 @@ import { request } from "node:http";
 import { WebSocket } from "ws";
 import type { AiProvider } from "./ai";
 import { hasPeerRoom, type SessionRec } from "./authz";
-import { startRelay, SUMMON_LIMIT_PER_MINUTE } from "./index";
+import { startRelay, SUMMON_LIMIT_PER_DAY, SUMMON_LIMIT_PER_MINUTE } from "./index";
 import { createReportBuffer, MAX_REPORT_LINES, reportLineFor } from "./report";
 import { createLogger, type Logger } from "./logger";
 
@@ -663,8 +663,7 @@ it("P1-4: a member cannot drain the provider with repeated summons", async () =>
   expect(calls).toBeLessThanOrEqual(SUMMON_LIMIT_PER_MINUTE);
 });
 
-it("P1-4: one member's spending does not block another's", async () => {
-  let calls = 0;
+it("P1-4: one member's spending does not block another's", async () => {  let calls = 0;
   const relay = await startTestRelay({
     aiProvider: {
       name: "counting",
@@ -699,6 +698,100 @@ it("P1-4: one member's spending does not block another's", async () => {
   guest.send({ type: "summon", sessionId, requestId: "g-1", question: "q", context: [] });
   await guest.waitFor((m) => m.type === "ai-answer" || m.type === "ai-error");
   expect(calls).toBe(before + 1);
+});
+
+it("P1-4: a member cannot burn the daily credit budget in one sitting", async () => {
+  let calls = 0;
+  let now = Date.now();
+  const relay = await startTestRelay({
+    aiProvider: {
+      name: "counting",
+      complete: () => {
+        calls += 1;
+        return Promise.resolve("answer");
+      },
+    },
+    now: () => now,
+  });
+  const host = await connect(relay.url);
+  await host.hello("host-1", "Ada");
+  const sessionId = await host.createSession();
+
+  // Dodge the per-minute bucket by stepping past its window every send, so
+  // only the daily budget can trip.
+  for (let i = 0; i < SUMMON_LIMIT_PER_DAY; i += 1) {
+    now += 61_000;
+    host.send({
+      type: "summon",
+      sessionId,
+      requestId: `d-${i}`,
+      question: "q",
+      context: [],
+    });
+    await host.waitFor((m) => m.type === "ai-answer" && m.requestId === `d-${i}`);
+  }
+  now += 61_000;
+  host.send({ type: "summon", sessionId, requestId: "d-over", question: "q", context: [] });
+  const limited = await host.waitFor(
+    (m) => m.type === "ai-error" && m.code === "ai-quota-exceeded",
+  );
+  expect(limited.type).toBe("ai-error");
+  expect(calls).toBe(SUMMON_LIMIT_PER_DAY);
+});
+
+it("P1-4: an over-long question is refused before any provider spend", async () => {
+  let calls = 0;
+  const relay = await startTestRelay({
+    aiProvider: {
+      name: "counting",
+      complete: () => {
+        calls += 1;
+        return Promise.resolve("answer");
+      },
+    },
+  });
+  const host = await connect(relay.url);
+  await host.hello("host-1", "Ada");
+  const sessionId = await host.createSession();
+  host.send({
+    type: "summon",
+    sessionId,
+    requestId: "long-1",
+    question: "x".repeat(501),
+    context: [],
+  });
+  const refused = await host.waitFor(
+    (m) => m.type === "ai-error" && m.code === "ai-too-long",
+  );
+  expect(refused.type).toBe("ai-error");
+  expect(calls).toBe(0);
+});
+
+it("P1-4: the relay trims the question and context it forwards", async () => {
+  let seen: { question: string; context: { name: string; body: string }[] } | undefined;
+  const relay = await startTestRelay({
+    aiProvider: {
+      name: "capturing",
+      complete: (request) => {
+        seen = { question: request.question, context: request.context };
+        return Promise.resolve("answer");
+      },
+    },
+  });
+  const host = await connect(relay.url);
+  await host.hello("host-1", "Ada");
+  const sessionId = await host.createSession();
+  host.send({
+    type: "summon",
+    sessionId,
+    requestId: "trim-1",
+    question: "  padded question  ",
+    context: [{ name: "A", body: "y".repeat(600) }],
+  });
+  await host.waitFor((m) => m.type === "ai-answer");
+  expect(seen?.question).toBe("padded question");
+  expect(seen?.context).toHaveLength(1);
+  expect(seen?.context[0]?.body).toHaveLength(500);
 });
 
 it("P2-3: a refused visitor is told the session is full, not left waiting", async () => {

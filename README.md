@@ -67,7 +67,7 @@ Set on the relay: `DATABASE_URL`, `TOKEN_SECRET`, `GROQ_API_KEY`, `TRUST_PROXY=t
 
 - Up to 6 peers (a full mesh, so this is CPU-bound on a laptop).
 - One device per member — a new login evicts the old one.
-- Sessions live 7 days; `@ai` is capped at 5 calls per member per minute.
+- Sessions live 7 days; `@ai` is capped at 5 calls per member per minute and 60 per member per day, with questions under 500 characters.
 - One shared room key: no forward secrecy, and leaving a room does not revoke it.
 
 ## Notes

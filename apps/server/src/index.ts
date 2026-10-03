@@ -1,5 +1,6 @@
 import {
   assertStrongSecret,
+  createPostgresRateLimitStore,
   createRateLimiter,
   type HistoryMessage,
   MAX_SUMMON_CONTEXT_LINES,
@@ -36,6 +37,7 @@ import {
 import { createAuthHandler } from "./auth-http";
 import { getPool } from "./db";
 import { SessionPersistence } from "./session-persist";
+import { trimSummonContext } from "./ai";
 
 export type RelayOptions = {
   port: number;
@@ -58,6 +60,20 @@ export const AI_GRANT_TTL_MS = 2 * 60_000;
 /** Provider calls one member may make per minute, across all their sessions. */
 export const SUMMON_LIMIT_PER_MINUTE = 5;
 const SUMMON_WINDOW_MS = 60_000;
+
+/**
+ * Provider calls one member may make per day. Postgres-backed when a database
+ * is configured, so restarts do not hand out a fresh budget — this is the
+ * credit protection; the per-minute limit only smooths bursts.
+ */
+export const SUMMON_LIMIT_PER_DAY = 60;
+const SUMMON_DAY_MS = 86_400_000;
+
+/** Anything longer is bulk extraction, not a chat question. */
+export const SUMMON_MAX_QUESTION_CHARS = 500;
+/** Caps provider tokens per call: most-recent lines win, bodies truncated. */
+export const SUMMON_MAX_CONTEXT_CHARS = 6_000;
+const SUMMON_MAX_LINE_CHARS = 500;
 
 type RtcMessage = Extract<
   SignalClientMessage,
@@ -257,6 +273,30 @@ class Connection {
     windowMs: SUMMON_WINDOW_MS,
     now: () => this.now(),
   });
+  /**
+   * Daily credit protection. Postgres-backed when configured so a restart
+   * does not hand out a fresh budget; per-socket memory otherwise, same as
+   * the per-minute bucket.
+   */
+  private readonly summonDaily: RateLimiter = createRateLimiter({
+    limit: SUMMON_LIMIT_PER_DAY,
+    windowMs: SUMMON_DAY_MS,
+    now: () => this.now(),
+    store: process.env.DATABASE_URL ? createPostgresRateLimitStore(getPool()) : undefined,
+  });
+
+  /** A dead quota store must not take chat AI down with it: log and allow. */
+  private async takeQuota(limiter: RateLimiter, key: string, op: string): Promise<boolean> {
+    try {
+      return await limiter.take(key);
+    } catch (cause) {
+      this.logger.warn("summon_quota_store_failed", {
+        op,
+        reason: cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause),
+      });
+      return true;
+    }
+  }
 
   constructor(
     readonly socket: WebSocket,
@@ -267,6 +307,11 @@ class Connection {
     private readonly logger: Logger = defaultLogger,
     private readonly onAuthenticated: (userId: UserId, socket: WebSocket) => void,
     private readonly persistence: SessionPersistence | null = null,
+    /**
+     * Boot restore. A socket that connects mid-restart must not act on a
+     * half-empty store: `ready` (and everything after it) waits for this.
+     */
+    private readonly whenReady: Promise<void> = Promise.resolve(),
   ) {}
 
   /** Replay missed ciphertext after a rejoin; a no-op without persistence. */
@@ -336,7 +381,7 @@ class Connection {
       return;
     }
     this.helloPending = verifyToken(msg.token, this.tokenSecret).then(
-      (verified) => {
+      async (verified) => {
         this.helloPending = null;
         if (!verified) {
           this.logger.warn("auth_failed", { code: "bad-token", name: msg.name });
@@ -347,6 +392,9 @@ class Connection {
           });
           return;
         }
+        // A reload landing mid-restart would otherwise knock against a store
+        // whose sessions have not been restored yet and hear "no-session".
+        await this.whenReady;
         // DECISIONS #6: one device per member. The old socket is told the
         // account moved before this one is allowed to act.
         this.onAuthenticated(verified, this.socket);
@@ -615,17 +663,6 @@ class Connection {
       return;
     }
     if (!canSend(session, senderId, "member").ok) return;
-    if (!(await this.summonQuota.take(`user:${senderId}`))) {
-      this.logger.warn("summon_rate_limited", { sessionId: session.id, userId: senderId });
-      send(this.socket, {
-        type: "ai-error",
-        sessionId: session.id,
-        requestId: msg.requestId,
-        code: "ai-rate-limited",
-        message: "Summon AI is answering too often, try again shortly",
-      });
-      return;
-    }
     const provider = this.aiProvider;
     if (!provider) {
       send(this.socket, {
@@ -637,13 +674,51 @@ class Connection {
       });
       return;
     }
+    if (!(await this.takeQuota(this.summonQuota, `user:${senderId}`, "per-minute"))) {
+      this.logger.warn("summon_rate_limited", { sessionId: session.id, userId: senderId });
+      send(this.socket, {
+        type: "ai-error",
+        sessionId: session.id,
+        requestId: msg.requestId,
+        code: "ai-rate-limited",
+        message: "Summon AI is answering too often, try again shortly",
+      });
+      return;
+    }
+    if (!(await this.takeQuota(this.summonDaily, `summon-day:user:${senderId}`, "per-day"))) {
+      this.logger.warn("summon_quota_exceeded", { sessionId: session.id, userId: senderId });
+      send(this.socket, {
+        type: "ai-error",
+        sessionId: session.id,
+        requestId: msg.requestId,
+        code: "ai-quota-exceeded",
+        message: "Summon AI daily limit reached, try again tomorrow",
+      });
+      return;
+    }
+    const question = msg.question.trim();
+    if (question.length > SUMMON_MAX_QUESTION_CHARS) {
+      send(this.socket, {
+        type: "ai-error",
+        sessionId: session.id,
+        requestId: msg.requestId,
+        code: "ai-too-long",
+        message: `Keep @ai questions under ${SUMMON_MAX_QUESTION_CHARS} characters`,
+      });
+      return;
+    }
     // The relay proxies the provider call and keeps nothing: no roster entry,
     // no report line, no retained context. The answer goes back to the
     // summoner alone, who encrypts it and posts it to the room.
     const requestId = msg.requestId;
     const request = {
-      question: msg.question,
-      context: msg.context.slice(-MAX_SUMMON_CONTEXT_LINES),
+      question,
+      context: trimSummonContext(
+        msg.context,
+        MAX_SUMMON_CONTEXT_LINES,
+        SUMMON_MAX_LINE_CHARS,
+        SUMMON_MAX_CONTEXT_CHARS,
+      ),
     };
     void provider
       .complete(request)
@@ -888,15 +963,15 @@ export function startRelay(options: RelayOptions) {
   const wss = new WebSocketServer({ server });
   server.listen(options.port);
   const store = new SessionStore(log);
-  if (persistence) {
-    // Async on purpose: the relay serves new rooms immediately and backfills
-    // restored ones when the database answers.
-    void persistence.loadLive().then(({ sessions, messages }) => {
-      if (sessions.length === 0) return;
-      store.restore(sessions, messages);
-      log.info("sessions_restored", { count: sessions.length });
-    });
-  }
+  // The relay serves new rooms immediately, but no socket acts until the
+  // restored sessions are back: `ready` waits on this inside hello().
+  const boot = (async () => {
+    if (!persistence) return;
+    const { sessions, messages } = await persistence.loadLive();
+    if (sessions.length === 0) return;
+    store.restore(sessions, messages);
+    log.info("sessions_restored", { count: sessions.length });
+  })();
 
   const live = new Map<UserId, Connection>();
 
@@ -919,6 +994,7 @@ export function startRelay(options: RelayOptions) {
         live.set(userId, connection);
       },
       persistence,
+      boot,
     );
     socket.on("message", (raw) => connection.onMessage(raw));
     socket.on("close", () => {
