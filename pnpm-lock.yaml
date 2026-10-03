@@ -14,6 +14,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@neondatabase/serverless':
+        specifier: ^1.2.0
+        version: 1.2.0
       '@summon/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -39,9 +42,6 @@ importers:
       '@base-ui/react':
         specifier: ^1.8.0
         version: 1.8.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
-      '@neondatabase/serverless':
-        specifier: ^1.2.0
-        version: 1.2.0
       '@shadcn/react':
         specifier: ^0.3.1
         version: 0.3.1(@types/react@19.3.0)(react@19.3.0)

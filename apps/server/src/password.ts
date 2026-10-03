@@ -10,8 +10,7 @@ function derive(password: string, salt: Buffer): Promise<Buffer> {
 }
 
 /**
- * Async on purpose: scryptSync parks the event loop for ~100ms per call, which
- * on a serverless instance means every concurrent request waits behind it.
+ * Async on purpose: scryptSync parks the event loop for ~100ms per call.
  * scrypt runs on the libuv threadpool instead, so the loop stays free.
  */
 export async function hashPassword(password: string): Promise<string> {

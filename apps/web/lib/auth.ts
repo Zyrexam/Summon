@@ -9,6 +9,19 @@ export type AuthUser = {
 const TOKEN_KEY = "summon.token";
 const USER_KEY = "summon.user";
 
+/**
+ * Single-env frontend: the browser talks to the backend directly for both
+ * auth HTTP and the WS relay. `NEXT_PUBLIC_SIGNAL_URL=wss://host` implies
+ * the API base `https://host` — no other env var needed on Vercel.
+ */
+function apiBase(): string {
+  const signal =
+    process.env.NEXT_PUBLIC_SIGNAL_URL ?? "ws://127.0.0.1:8787";
+  if (signal.startsWith("wss://")) return `https://${signal.slice(6)}`;
+  if (signal.startsWith("ws://")) return `http://${signal.slice(5)}`;
+  return signal.replace(/\/$/, "");
+}
+
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(TOKEN_KEY);
@@ -41,7 +54,7 @@ export async function loginRequest(
   path: "/api/auth/login" | "/api/auth/register",
   body: Record<string, string>,
 ): Promise<{ token: string; user: AuthUser } | { error: string }> {
-  const res = await fetch(path, {
+  const res = await fetch(`${apiBase()}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

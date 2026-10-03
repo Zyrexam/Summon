@@ -32,6 +32,8 @@ import {
   DEFAULT_SUMMON_MODEL,
   type AiProvider,
 } from "./ai";
+import { createAuthHandler } from "./auth-http";
+import { getPool } from "./db";
 
 export type RelayOptions = {
   port: number;
@@ -39,6 +41,8 @@ export type RelayOptions = {
   aiProvider: AiProvider | null;
   now?: () => number;
   logger?: Logger;
+  /** Behind Render, forwarding headers identify the client. */
+  trustProxy?: boolean;
 };
 
 /** How long an `ai-answer` requestId may still authorise its room message. */
@@ -752,20 +756,32 @@ type Handlers = {
 export function startRelay(options: RelayOptions) {
   // Better a failed deploy than one where anyone can mint a valid token.
   assertStrongSecret(options.tokenSecret, process.env.NODE_ENV === "production");
+  const log = options.logger ?? defaultLogger;
+  // Auth API owned here so Vercel never touches the database: one pool,
+  // in-memory rate limits, zero rate-limit writes.
+  const handleAuth = createAuthHandler({
+    getDb: getPool,
+    tokenSecret: options.tokenSecret,
+    trustProxy:
+      options.trustProxy ?? process.env.TRUST_PROXY === "true",
+    logger: log,
+  });
   // Plain http server so free hosts (Render Web Service) have something to
   // health-check. WS upgrades still go to the relay; GET /health is 200.
   const server: Server = createServer((req, res) => {
-    if (req.url === "/health") {
+    if (req.url === "/health" || req.url?.startsWith("/health?")) {
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("ok");
       return;
     }
-    res.writeHead(426, { "content-type": "text/plain" });
-    res.end("Upgrade Required");
+    void handleAuth(req, res).then((handled) => {
+      if (handled) return;
+      res.writeHead(426, { "content-type": "text/plain" });
+      res.end("Upgrade Required");
+    });
   });
   const wss = new WebSocketServer({ server });
   server.listen(options.port);
-  const log = options.logger ?? defaultLogger;
   const store = new SessionStore(log);
 
   const live = new Map<UserId, Connection>();

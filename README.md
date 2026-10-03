@@ -58,9 +58,10 @@ Three deployables:
 The relay cannot run on Vercel: WebSocket connections are pinned to one function
 instance, so two peers in the same room could land apart and never connect.
 
-Set on Vercel: `DATABASE_URL`, `TOKEN_SECRET`, `TRUST_PROXY=true`, and
-`NEXT_PUBLIC_SIGNAL_URL` **as a build variable** (`NEXT_PUBLIC_*` values are
-inlined at build time). Set on the relay: `TOKEN_SECRET`, `GROQ_API_KEY`.
+Set on Vercel: `NEXT_PUBLIC_SIGNAL_URL` **as a build variable** (`NEXT_PUBLIC_*` values are
+inlined at build time) — that is the only variable the frontend needs. The browser
+derives the auth API base (`https://host`) from the relay URL (`wss://host`).
+Set on the relay: `DATABASE_URL`, `TOKEN_SECRET`, `GROQ_API_KEY`, `TRUST_PROXY=true`.
 
 ## Limits
 
@@ -71,6 +72,6 @@ inlined at build time). Set on the relay: `TOKEN_SECRET`, `GROQ_API_KEY`.
 
 ## Notes
 
-- `apps/server` is a `ws` relay. It authenticates, brokers WebRTC signalling, and keeps a session in memory. It stores no messages and never touches the database.
-- The database holds users and rate-limit counters, and nothing else.
+- `apps/server` is a `ws` relay plus the auth API (`POST /api/auth/login|register`). It authenticates, brokers WebRTC signalling, and keeps a session in memory. It stores no messages.
+- The database holds users and nothing else. Rate limits are in-memory on the relay.
 - Logs are one JSON object per line, with tokens and keys redacted.
