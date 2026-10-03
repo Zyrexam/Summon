@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="ember" x1="32" y1="8" x2="32" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F2A33C"/>
+      <stop offset="0.55" stop-color="#E2622B"/>
+      <stop offset="1" stop-color="#B93A1C"/>
+    </linearGradient>
+    <linearGradient id="core" x1="32" y1="30" x2="32" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFE9B8"/>
+      <stop offset="1" stop-color="#F7B05B"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#141414"/>
+  <path fill="url(#ember)" d="M32 7c1.6 8.4.6 13.6-3.2 18.6-3.4 4.4-9.6 7.6-11.6 14.6-2.2 7.6 2.6 14.4 8 17.2-1.4-3.4-.6-6.6 1.4-9.6 1.4 2.6 3.2 4.2 5.4 5 .4-2.6.2-4.8-1-7 3.4 2.6 6.4 5.8 6.8 9.6.4 4-1.6 7.4-4.6 9.4 5.6-1 9.6-5.2 10.2-11.2.8-8-4.4-12.6-8.6-17.6C31 25.6 28.6 21 29.6 15c1-5.4 2-8.4 2.4-8z"/>
+  <path fill="url(#core)" d="M32.6 31c.8 3.4-.6 5.6-2.6 7.6-2.2 2.2-4.6 4.6-4.8 8-.2 3.6 2.2 6.8 5.4 8 0-2.6 1.2-4.2 3-5.8 1.4 1.4 2.4 3 2.6 4.8 2-1.6 3-4 2.8-6.6-.2-3.4-2.4-5.4-4.4-7.6-1.6-1.8-2-3.6-2-5.4z"/>
+</svg>
