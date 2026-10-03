@@ -1,0 +1,12 @@
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DROP TABLE IF EXISTS room_messages;
+DROP TABLE IF EXISTS room_knocks;
+DROP TABLE IF EXISTS room_members;
+DROP TABLE IF EXISTS rooms;
