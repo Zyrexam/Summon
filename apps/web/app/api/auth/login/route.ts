@@ -21,7 +21,7 @@ export async function POST(request: Request) {
   }
   try {
     const user = await findUserByEmail(pool, email);
-    if (!user || !verifyPassword(password, user.password_hash)) {
+    if (!user || !(await verifyPassword(password, user.password_hash))) {
       return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
     }
     const token = await signToken(user.id, tokenSecret);

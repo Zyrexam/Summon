@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       pool,
       crypto.randomUUID(),
       email,
-      hashPassword(password),
+      await hashPassword(password),
       name,
     );
     if (!user) {
