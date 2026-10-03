@@ -87,12 +87,14 @@ function roomKeyStorage(sessionId: string): string {
 
 export function loadRoomKey(sessionId: string): string | null {
   if (typeof window === "undefined") return null;
-  return window.sessionStorage.getItem(roomKeyStorage(sessionId));
+  // localStorage, not sessionStorage: the key must survive the host opening the
+  // session in another tab, or that tab mints a new key and orphans the room.
+  return window.localStorage.getItem(roomKeyStorage(sessionId));
 }
 
 export function saveRoomKey(sessionId: string, key: string): void {
   if (typeof window === "undefined") return;
-  window.sessionStorage.setItem(roomKeyStorage(sessionId), key);
+  window.localStorage.setItem(roomKeyStorage(sessionId), key);
 }
 
 export function useSession(onEvent: (event: SessionEvent) => void) {

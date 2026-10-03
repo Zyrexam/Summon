@@ -42,3 +42,39 @@ test("empty report still renders a header", () => {
 test("report ends with the ended time when the session has ended", () => {
   assert.match(formatReport(lines, "2026-08-01T10:05:00.000Z"), /10:05:00/);
 });
+
+test("report escapes a pipe so a name cannot forge table columns", () => {
+  const out = formatReport(
+    [
+      {
+        senderId: "u1",
+        senderName: "Ada | Bob",
+        msgId: "m-1",
+        at: "2026-08-01T10:00:00.000Z",
+        kind: "human",
+      },
+    ],
+    null,
+  );
+  const row = out.split("\n").find((line) => line.includes("Ada"));
+  assert.equal(row, "| 10:00:00 | Ada \\| Bob | m-1 |");
+});
+
+test("report collapses newlines so a name cannot forge a row", () => {
+  const out = formatReport(
+    [
+      {
+        senderId: "u1",
+        senderName: "Ada\n| injected | row",
+        msgId: "m-1",
+        at: "2026-08-01T10:00:00.000Z",
+        kind: "human",
+      },
+    ],
+    null,
+  );
+  assert.equal(
+    out.split("\n").filter((line) => line.includes("injected")).length,
+    1,
+  );
+});

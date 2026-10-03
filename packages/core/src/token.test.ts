@@ -43,10 +43,16 @@ test("rejects a token whose expiry was extended", async () => {
   assert.equal(await verifyToken(extended, secret, { now }), null);
 });
 
-test("keeps verifying legacy userId.sig tokens as non-expiring", async () => {
+test("legacy userId.sig tokens verify only when a migration opts in", async () => {
   const legacy = await signToken("user-1", secret, { legacy: true });
   assert.equal(legacy.split(".").length, 2);
-  assert.equal(await verifyToken(legacy, secret, { now: 9_000_000_000_000 }), "user-1");
+  // Cut off by default: these carry no expiry and would otherwise stay valid
+  // forever. A migration path can still accept them deliberately.
+  assert.equal(await verifyToken(legacy, secret), null);
+  assert.equal(
+    await verifyToken(legacy, secret, { allowLegacy: true, now: 9_000_000_000_000 }),
+    "user-1",
+  );
 });
 
 test("rejects a legacy token signed with another secret", async () => {
@@ -61,4 +67,20 @@ test("rejects malformed tokens", async () => {
   assert.equal(await verifyToken("user-1..sig", secret, { now }), null);
   assert.equal(await verifyToken("user-1.notanumber.sig", secret, { now }), null);
   assert.equal(await verifyToken("user-1.1.zz", secret, { now }), null);
+});
+
+test("legacy tokens without an expiry are refused by default", async () => {
+  const legacy = await signToken("u1", secret, { legacy: true });
+  assert.equal(legacy.split(".").length, 2);
+  assert.equal(await verifyToken(legacy, secret), null);
+});
+
+test("legacy tokens stay acceptable only when a migration asks for them", async () => {
+  const legacy = await signToken("u1", secret, { legacy: true });
+  assert.equal(await verifyToken(legacy, secret, { allowLegacy: true }), "u1");
+});
+
+test("an expiring token is unaffected by the legacy switch", async () => {
+  const token = await signToken("u1", secret);
+  assert.equal(await verifyToken(token, secret, { allowLegacy: true }), "u1");
 });

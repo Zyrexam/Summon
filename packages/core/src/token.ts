@@ -10,6 +10,8 @@ export type SignTokenOptions = {
 
 export type VerifyTokenOptions = {
   now?: number;
+  /** Accept pre-expiry `userId.sig` tokens. Off by default: they never lapse. */
+  allowLegacy?: boolean;
 };
 
 function hex(bytes: Uint8Array): string {
@@ -66,6 +68,9 @@ export async function verifyToken(
   const head = token.slice(0, dot);
   const split = head.lastIndexOf(".");
   const hasExpiry = split > 0;
+  // Tokens minted before expiry existed carry no exp and would never lapse.
+  // Refusing them is the point: a migration can opt back in explicitly.
+  if (!hasExpiry && !options.allowLegacy) return null;
   const userId = hasExpiry ? head.slice(0, split) : head;
   const exp = hasExpiry ? Number(head.slice(split + 1)) : null;
   if (!userId) return null;

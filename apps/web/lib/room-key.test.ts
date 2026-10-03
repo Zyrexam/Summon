@@ -44,3 +44,31 @@ describe("createRoomKeyStore", () => {
     expect(generate).toHaveBeenCalledTimes(1);
   });
 });
+describe("room key storage", () => {
+  test("is shared across tabs, not per tab", async () => {
+    const shared = new Map<string, string>();
+    const perTab = new Map<string, string>();
+    const make = (map: Map<string, string>) => ({
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => void map.set(k, v),
+      removeItem: (k: string) => void map.delete(k),
+    });
+    (globalThis as Record<string, unknown>).window = {
+      localStorage: make(shared),
+      // sessionStorage is per tab in a real browser: this stands in for it.
+      sessionStorage: make(perTab),
+    };
+
+    const { loadRoomKey, saveRoomKey } = await import("./session");
+    saveRoomKey("s1", "k1");
+
+    // The key must land in storage a second tab can see, or reopening the host
+    // in a new tab mints a fresh key and orphans everyone already admitted.
+    expect(shared.get("summon.roomKey.s1")).toBe("k1");
+    expect(perTab.size).toBe(0);
+    expect(loadRoomKey("s1")).toBe("k1");
+    expect(loadRoomKey("s2")).toBeNull();
+
+    delete (globalThis as Record<string, unknown>).window;
+  });
+});
