@@ -10,6 +10,7 @@ import type { AiProvider } from "./ai";
 import { hasPeerRoom, type SessionRec } from "./authz";
 import { startRelay, SUMMON_LIMIT_PER_MINUTE } from "./index";
 import { createReportBuffer, MAX_REPORT_LINES, reportLineFor } from "./report";
+import { createLogger, type Logger } from "./logger";
 
 const secret = "test-secret";
 
@@ -123,12 +124,14 @@ function fakeAi(answer = "Ada mentioned three deadlines."): AiProvider {
 async function startTestRelay(options?: {
   aiProvider?: AiProvider;
   now?: () => number;
+  logger?: Logger;
 }) {
   const relay = startRelay({
     port: 0,
     tokenSecret: secret,
     aiProvider: options?.aiProvider ?? null,
     now: options?.now,
+    logger: options?.logger,
   });
   const port = relay.port();
   const url = `ws://127.0.0.1:${port}`;
@@ -723,4 +726,60 @@ it("P2-3: a refused visitor is told the session is full, not left waiting", asyn
   );
   expect(visitorFrame.type).toBe("error");
   expect(visitorFrame.type === "error" && visitorFrame.code).toBe("full");
+});
+
+it("P5-8: the relay reports its decisions as structured logs", async () => {
+  const lines: string[] = [];
+  const relay = await startTestRelay({
+    logger: createLogger({ sink: (line) => lines.push(line) }),
+  });
+
+  const mallory = await connect(relay.url);
+  mallory.send({ type: "hello", token: "forged.signature", name: "Mallory" });
+  await mallory.waitFor((m) => m.type === "error" && m.code === "bad-token");
+
+  const host = await connect(relay.url);
+  await host.hello("host-1", "Ada");
+  const sessionId = await host.createSession();
+  await host.send({ type: "end", sessionId });
+  await host.waitFor((m) => m.type === "session-ended");
+
+  const events = lines.map((line) => JSON.parse(line) as { event: string });
+  const names = events.map((e) => e.event);
+  expect(names).toContain("auth_failed");
+  expect(names).toContain("session_created");
+  expect(names).toContain("session_ended");
+  expect(lines.every((line) => !line.includes("\n"))).toBe(true);
+
+  const failed = events.find((e) => e.event === "auth_failed");
+  expect(failed).toMatchObject({ level: "warn", code: "bad-token" });
+  const ended = events.find((e) => e.event === "session_ended");
+  expect(ended).toMatchObject({ sessionId, hostId: "host-1" });
+  expect(lines.join("\n")).not.toContain("forged");
+});
+
+it("P5-8: a denied knock is logged, and the report denial too", async () => {
+  const lines: string[] = [];
+  const relay = await startTestRelay({
+    logger: createLogger({ sink: (line) => lines.push(line) }),
+  });
+  const host = await connect(relay.url);
+  await host.hello("host-1", "Ada");
+  const sessionId = await host.createSession();
+
+  const visitor = await connect(relay.url);
+  await visitor.hello("visitor-1", "Eve");
+  visitor.send({ type: "knock", sessionId });
+  await host.waitFor((m) => m.type === "knock" && m.visitorId === "visitor-1");
+  host.send({ type: "deny", sessionId, visitorId: "visitor-1" });
+  await visitor.waitForType("denied");
+
+  const stranger = await connect(relay.url);
+  await stranger.hello("stranger-1", "Mallory");
+  stranger.send({ type: "report", sessionId });
+  await stranger.waitFor((m) => m.type === "error" && m.code === "forbidden");
+
+  const names = lines.map((line) => JSON.parse(line) as { event: string }).map((e) => e.event);
+  expect(names).toContain("knock_denied");
+  expect(names).toContain("report_denied");
 });

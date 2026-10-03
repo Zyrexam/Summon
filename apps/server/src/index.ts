@@ -24,6 +24,7 @@ import {
   type SessionRec,
 } from "./authz";
 import { createReportBuffer, reportLineFor } from "./report";
+import { logger as defaultLogger, type Logger } from "./logger";
 import {
   createGroqProvider,
   DEFAULT_SUMMON_MODEL,
@@ -35,6 +36,7 @@ export type RelayOptions = {
   tokenSecret: string;
   aiProvider: AiProvider | null;
   now?: () => number;
+  logger?: Logger;
 };
 
 /** How long an `ai-answer` requestId may still authorise its room message. */
@@ -52,6 +54,8 @@ type RtcMessage = Extract<
 /** The only session state the relay keeps; everything else is per-socket. */
 class SessionStore {
   private readonly sessions = new Map<SessionId, SessionRec>();
+
+  constructor(private readonly logger: Logger = defaultLogger) {}
 
   create(host: RelayMember): SessionRec {
     const session: SessionRec = {
@@ -88,6 +92,12 @@ class SessionStore {
     if (session.status === "ended") return;
     session.status = "ended";
     session.endedAt = Date.now();
+    this.logger.info("session_ended", {
+      sessionId: session.id,
+      hostId: session.hostId,
+      members: session.members.size,
+      lines: session.report.size(),
+    });
     broadcast(session, { type: "session-ended", sessionId: session.id });
     for (const peer of session.peers.values()) {
       if (peer.readyState === peer.OPEN) peer.close();
@@ -105,6 +115,7 @@ class SessionStore {
     const session = this.sessions.get(sessionId);
     if (session?.reportTtl) clearTimeout(session.reportTtl);
     this.sessions.delete(sessionId);
+    this.logger.info("session_purged", { sessionId });
   }
 
   reportLines(session: SessionRec): ReportLine[] {
@@ -181,6 +192,7 @@ class Connection {
     private readonly tokenSecret: string,
     private readonly aiProvider: AiProvider | null,
     private readonly now: () => number = Date.now,
+    private readonly logger: Logger = defaultLogger,
   ) {}
 
   private get handlers(): Handlers {
@@ -228,6 +240,7 @@ class Connection {
 
   private hello(msg: Extract<SignalClientMessage, { type: "hello" }>) {
     if (this.userId !== null || this.helloPending) {
+      this.logger.warn("hello_rejected", { reason: "already-authenticated" });
       send(this.socket, {
         type: "error",
         code: "already-authenticated",
@@ -239,6 +252,7 @@ class Connection {
       (verified) => {
         this.helloPending = null;
         if (!verified) {
+          this.logger.warn("auth_failed", { code: "bad-token", name: msg.name });
           send(this.socket, {
             type: "error",
             code: "bad-token",
@@ -275,6 +289,7 @@ class Connection {
       host: true,
     });
     this.joined.add(session.id);
+    this.logger.info("session_created", { sessionId: session.id, hostId: senderId });
     send(this.socket, { type: "session-created", sessionId: session.id });
     send(this.socket, {
       type: "roster",
@@ -302,6 +317,11 @@ class Connection {
     const senderId = this.requireUserId();
     const existing = this.store.get(sessionId);
     if (!existing || existing.status !== "live" || existing.hostId !== senderId) {
+      this.logger.warn("host_open_rejected", {
+        sessionId,
+        userId: senderId,
+        reason: existing ? "not-host" : "no-session",
+      });
       send(this.socket, {
         type: "error",
         code: existing ? "not-host" : "no-session",
@@ -388,6 +408,7 @@ class Connection {
     const knock = session.knocks.get(visitorId);
     if (!knock) return;
     if (admit && !hasMemberRoom(session, visitorId)) {
+      this.logger.warn("admission_refused", { sessionId, visitorId, reason: "full" });
       send(this.socket, { type: "error", code: "full", message: "Session is full" });
       // The visitor is the one left staring at a loading screen otherwise.
       if (knock.socket) {
@@ -401,6 +422,7 @@ class Connection {
     }
     session.knocks.delete(visitorId);
     if (!admit) {
+      this.logger.info("knock_denied", { sessionId: session.id, visitorId, by: senderId });
       if (knock.socket) {
         send(knock.socket, { type: "denied", sessionId: session.id });
       }
@@ -477,6 +499,7 @@ class Connection {
     }
     if (!canSend(session, senderId, "member").ok) return;
     if (!this.summonQuota.take(`user:${senderId}`)) {
+      this.logger.warn("summon_rate_limited", { sessionId: session.id, userId: senderId });
       send(this.socket, {
         type: "ai-error",
         sessionId: session.id,
@@ -608,6 +631,7 @@ class Connection {
     const session = this.store.get(sessionId);
     const guard = canReadReport(session, senderId);
     if (!guard.ok) {
+      this.logger.warn("report_denied", { sessionId, userId: senderId, code: guard.denial.code });
       send(this.socket, { type: "error", ...guard.denial });
       return;
     }
@@ -693,7 +717,8 @@ type Handlers = {
 
 export function startRelay(options: RelayOptions) {
   const wss = new WebSocketServer({ port: options.port });
-  const store = new SessionStore();
+  const log = options.logger ?? defaultLogger;
+  const store = new SessionStore(log);
 
   wss.on("connection", (socket) => {
     const connection = new Connection(
@@ -702,6 +727,7 @@ export function startRelay(options: RelayOptions) {
       options.tokenSecret,
       options.aiProvider,
       options.now,
+      log,
     );
     socket.on("message", (raw) => connection.onMessage(raw));
     socket.on("close", () => connection.close());

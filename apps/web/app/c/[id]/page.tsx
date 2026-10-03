@@ -463,15 +463,21 @@ export default function CallPage() {
               : "This call is over. Return to the dashboard to start another."}
           </p>
           {report && (
-            <Button
-              type="button"
-              variant="outline"
-              className="mt-4 w-full"
-              onClick={downloadReport}
-              data-testid="download-report"
-            >
-              Download report
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-4 w-full"
+                onClick={downloadReport}
+                data-testid="download-report"
+              >
+                Download report
+              </Button>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Who spoke, when, and which message. Message text stays
+                end-to-end encrypted and is never on the relay.
+              </p>
+            </>
           )}
           <Button
             type="button"
