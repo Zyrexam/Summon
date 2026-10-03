@@ -219,7 +219,9 @@ class Connection {
       deny: (msg) => this.onAdmission(msg.sessionId, msg.visitorId, false),
       "room-key": (msg) => this.onRoomKey(msg.sessionId, msg.to, msg.key),
       "room-msg": (msg) => this.onRoomMsg(msg),
-      summon: (msg) => this.onSummon(msg),
+      summon: (msg) => {
+        void this.onSummon(msg);
+      },
       join: (msg) => this.onJoin(msg.sessionId),
       leave: (msg) => this.onLeave(msg.sessionId),
       end: (msg) => this.onEnd(msg.sessionId),
@@ -514,7 +516,7 @@ class Connection {
     }
   }
 
-  private onSummon(msg: Extract<SignalClientMessage, { type: "summon" }>) {
+  private async onSummon(msg: Extract<SignalClientMessage, { type: "summon" }>) {
     const senderId = this.requireUserId();
     const session = this.store.live(msg.sessionId);
     if (!session) {
@@ -528,7 +530,7 @@ class Connection {
       return;
     }
     if (!canSend(session, senderId, "member").ok) return;
-    if (!this.summonQuota.take(`user:${senderId}`)) {
+    if (!(await this.summonQuota.take(`user:${senderId}`))) {
       this.logger.warn("summon_rate_limited", { sessionId: session.id, userId: senderId });
       send(this.socket, {
         type: "ai-error",

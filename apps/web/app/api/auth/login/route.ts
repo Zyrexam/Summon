@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   if (!email || !password) {
     return NextResponse.json({ error: "Email and password required" }, { status: 400 });
   }
-  if (isRateLimited(request, email)) {
+  if (await isRateLimited(request, email)) {
     return NextResponse.json({ error: "Too many attempts" }, { status: 429 });
   }
   try {

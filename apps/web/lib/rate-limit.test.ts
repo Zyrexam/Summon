@@ -33,30 +33,36 @@ describe("client identity", () => {
 });
 
 describe("limiting", () => {
-  it("stops rotating x-forwarded-for from resetting the bucket", () => {
+  it("stops rotating x-forwarded-for from resetting the bucket", async () => {
     const guard = createRateLimitGuard({ perIpLimit: 3 });
-    const attempts = Array.from({ length: 6 }, (_, index) =>
-      guard.isRateLimited(
-        request({ "x-forwarded-for": `10.0.0.${index}` }),
-        "ada@example.com",
-      ),
-    );
+    const attempts = [];
+    for (let index = 0; index < 6; index += 1) {
+      attempts.push(
+        await guard.isRateLimited(
+          request({ "x-forwarded-for": `10.0.0.${index}` }),
+          "ada@example.com",
+        ),
+      );
+    }
     expect(attempts.slice(0, 3)).toEqual([false, false, false]);
     expect(attempts.slice(3)).toEqual([true, true, true]);
   });
 
-  it("still limits a single email when the client rotates", () => {
+  it("still limits a single email when the client rotates", async () => {
     const guard = createRateLimitGuard({ perEmailLimit: 3, perIpLimit: 100 });
-    const attempts = Array.from({ length: 6 }, (_, index) =>
-      guard.isRateLimited(
-        request({ "x-forwarded-for": `10.0.0.${index}` }),
-        "ada@example.com",
-      ),
-    );
+    const attempts = [];
+    for (let index = 0; index < 6; index += 1) {
+      attempts.push(
+        await guard.isRateLimited(
+          request({ "x-forwarded-for": `10.0.0.${index}` }),
+          "ada@example.com",
+        ),
+      );
+    }
     expect(attempts.filter(Boolean)).toHaveLength(3);
   });
 
-  it("counts the email bucket even when the IP bucket is already spent", () => {
+  it("counts the email bucket even when the IP bucket is already spent", async () => {
     let clock = 0;
     const guard = createRateLimitGuard({
       perIpLimit: 1,
@@ -65,33 +71,33 @@ describe("limiting", () => {
       perEmailWindowMs: 60_000,
       now: () => clock,
     });
-    expect(guard.isRateLimited(request(), "a@example.com")).toBe(false);
+    expect(await guard.isRateLimited(request(), "a@example.com")).toBe(false);
     // Rejected on the IP bucket, but the email bucket must still be charged:
     // once the short IP window lapses this client gets no free email attempt.
-    expect(guard.isRateLimited(request(), "b@example.com")).toBe(true);
+    expect(await guard.isRateLimited(request(), "b@example.com")).toBe(true);
     clock += 5_001;
-    expect(guard.isRateLimited(request(), "b@example.com")).toBe(true);
+    expect(await guard.isRateLimited(request(), "b@example.com")).toBe(true);
   });
 
-  it("keeps separate clients and separate emails independent", () => {
+  it("keeps separate clients and separate emails independent", async () => {
     const guard = createRateLimitGuard({ trustProxy: true, perEmailLimit: 1 });
     expect(
-      guard.isRateLimited(request({ "x-forwarded-for": "203.0.113.1" }), "a@b.c"),
+      await guard.isRateLimited(request({ "x-forwarded-for": "203.0.113.1" }), "a@b.c"),
     ).toBe(false);
     expect(
-      guard.isRateLimited(request({ "x-forwarded-for": "203.0.113.2" }), "a@b.c"),
+      await guard.isRateLimited(request({ "x-forwarded-for": "203.0.113.2" }), "a@b.c"),
     ).toBe(true);
     expect(
-      guard.isRateLimited(request({ "x-forwarded-for": "203.0.113.2" }), "x@y.z"),
+      await guard.isRateLimited(request({ "x-forwarded-for": "203.0.113.2" }), "x@y.z"),
     ).toBe(false);
   });
 
-  it("lets attempts through again once the window passes", () => {
+  it("lets attempts through again once the window passes", async () => {
     let clock = 0;
     const guard = createRateLimitGuard({ perEmailLimit: 1, now: () => clock });
-    expect(guard.isRateLimited(request(), "a@example.com")).toBe(false);
-    expect(guard.isRateLimited(request(), "a@example.com")).toBe(true);
+    expect(await guard.isRateLimited(request(), "a@example.com")).toBe(false);
+    expect(await guard.isRateLimited(request(), "a@example.com")).toBe(true);
     clock += 60_001;
-    expect(guard.isRateLimited(request(), "a@example.com")).toBe(false);
+    expect(await guard.isRateLimited(request(), "a@example.com")).toBe(false);
   });
 });

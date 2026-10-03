@@ -11,3 +11,14 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Login attempts, counted in the database rather than in process memory so
+-- that a serverless cold start cannot hand an attacker a fresh budget.
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL,
+  reset_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS rate_limits_reset_at_idx
+  ON rate_limits (reset_at);

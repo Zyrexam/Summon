@@ -20,7 +20,7 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (isRateLimited(request, email)) {
+  if (await isRateLimited(request, email)) {
     return NextResponse.json({ error: "Too many attempts" }, { status: 429 });
   }
   try {

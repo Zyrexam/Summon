@@ -1,4 +1,10 @@
-import { createRateLimiter, type RateLimiter } from "@summon/core";
+import {
+  createPostgresRateLimitStore,
+  createRateLimiter,
+  type RateLimiter,
+  type RateLimitStore,
+} from "@summon/core";
+import { pool } from "@/lib/pg";
 
 const WINDOW_MS = 60_000;
 
@@ -10,11 +16,13 @@ export type RateLimitGuardOptions = {
   perIpWindowMs?: number;
   perEmailWindowMs?: number;
   now?: () => number;
+  /** Shared counter store. Required once the app runs as several instances. */
+  store?: RateLimitStore;
 };
 
 export type RateLimitGuard = {
   clientIp: (request: Request) => string;
-  isRateLimited: (request: Request, email: string) => boolean;
+  isRateLimited: (request: Request, email: string) => Promise<boolean>;
 };
 
 export function createRateLimitGuard(
@@ -32,11 +40,13 @@ export function createRateLimitGuard(
     limit: perIpLimit,
     windowMs: perIpWindowMs,
     now,
+    store: options.store,
   });
   const perEmail: RateLimiter = createRateLimiter({
     limit: perEmailLimit,
     windowMs: perEmailWindowMs,
     now,
+    store: options.store,
   });
 
   /**
@@ -55,22 +65,32 @@ export function createRateLimitGuard(
     clientIp,
     // Both buckets are always consumed: short-circuiting on the IP bucket would
     // let a blocked client reset its email allowance for free.
-    isRateLimited: (request, email) => {
-      const ipOk = perIp.take(`ip:${clientIp(request)}`);
-      const emailOk = perEmail.take(`email:${email}`);
+    isRateLimited: async (request, email) => {
+      // Both buckets are always charged, even when one already refused.
+      const [ipOk, emailOk] = await Promise.all([
+        perIp.take(`ip:${clientIp(request)}`),
+        perEmail.take(`email:${email}`),
+      ]);
       return !(ipOk && emailOk);
     },
   };
 }
 
+/**
+ * Counting happens in Postgres when a database is configured, because a
+ * serverless instance keeps nothing between invocations: an in-process Map
+ * would start every cold start with an empty budget, which is precisely when
+ * an attacker is likely to be hammering the endpoint.
+ */
 const guard = createRateLimitGuard({
   trustProxy: process.env.TRUST_PROXY === "true",
+  store: process.env.DATABASE_URL ? createPostgresRateLimitStore(pool) : undefined,
 });
 
 export function clientIp(request: Request): string {
   return guard.clientIp(request);
 }
 
-export function isRateLimited(request: Request, email: string): boolean {
+export function isRateLimited(request: Request, email: string): Promise<boolean> {
   return guard.isRateLimited(request, email);
 }

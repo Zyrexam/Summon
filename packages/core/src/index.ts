@@ -20,6 +20,8 @@ export {
 export { DEFAULT_TOKEN_TTL_MS, signToken, verifyToken } from "./token";
 export type { SignTokenOptions, VerifyTokenOptions } from "./token";
 export { createRateLimiter } from "./rate-limit";
+export { createPostgresRateLimitStore, RATE_LIMIT_SQL } from "./rate-limit-store";
+export type { RateLimitStore } from "./rate-limit-store";
 export type { RateLimiter, RateLimiterOptions } from "./rate-limit";
 export {
   createUser,
