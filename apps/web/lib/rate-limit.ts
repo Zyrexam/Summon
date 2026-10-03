@@ -4,7 +4,7 @@ import {
   type RateLimiter,
   type RateLimitStore,
 } from "@summon/core";
-import { pool } from "@/lib/pg";
+import { getPool } from "@/lib/pg";
 
 const WINDOW_MS = 60_000;
 
@@ -82,15 +82,23 @@ export function createRateLimitGuard(
  * would start every cold start with an empty budget, which is precisely when
  * an attacker is likely to be hammering the endpoint.
  */
-const guard = createRateLimitGuard({
-  trustProxy: process.env.TRUST_PROXY === "true",
-  store: process.env.DATABASE_URL ? createPostgresRateLimitStore(pool) : undefined,
-});
+let guard: RateLimitGuard | null = null;
+
+function rateLimitGuard(): RateLimitGuard {
+  // Built on first use, so importing this module never needs a database.
+  guard ??= createRateLimitGuard({
+    trustProxy: process.env.TRUST_PROXY === "true",
+    store: process.env.DATABASE_URL
+      ? createPostgresRateLimitStore(getPool())
+      : undefined,
+  });
+  return guard;
+}
 
 export function clientIp(request: Request): string {
-  return guard.clientIp(request);
+  return rateLimitGuard().clientIp(request);
 }
 
 export function isRateLimited(request: Request, email: string): Promise<boolean> {
-  return guard.isRateLimited(request, email);
+  return rateLimitGuard().isRateLimited(request, email);
 }

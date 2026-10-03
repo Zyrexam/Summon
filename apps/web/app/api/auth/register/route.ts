@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createUser, normalizeEmail, signToken } from "@summon/core";
-import { pool, tokenSecret } from "@/lib/pg";
+import { getPool, getTokenSecret } from "@/lib/pg";
 import { hashPassword } from "@/lib/password";
+import { authErrorResponse, describeAuthError } from "@/lib/auth-errors";
 import { isRateLimited } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
   }
   try {
     const user = await createUser(
-      pool,
+      getPool(),
       crypto.randomUUID(),
       email,
       await hashPassword(password),
@@ -34,9 +35,11 @@ export async function POST(request: Request) {
     if (!user) {
       return NextResponse.json({ error: "Email already registered" }, { status: 409 });
     }
-    const token = await signToken(user.id, tokenSecret);
+    const token = await signToken(user.id, getTokenSecret());
     return NextResponse.json({ token, user: { id: user.id, email, name: user.name } });
-  } catch {
-    return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
+  } catch (cause) {
+    console.error(JSON.stringify(describeAuthError("register", cause)));
+    const failure = authErrorResponse(cause);
+    return NextResponse.json(failure.body, { status: failure.status });
   }
 }

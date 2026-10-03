@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { findUserByEmail, normalizeEmail, signToken } from "@summon/core";
-import { pool, tokenSecret } from "@/lib/pg";
+import { getPool, getTokenSecret } from "@/lib/pg";
 import { verifyPassword } from "@/lib/password";
+import { authErrorResponse, describeAuthError } from "@/lib/auth-errors";
 import { isRateLimited } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
@@ -20,16 +21,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Too many attempts" }, { status: 429 });
   }
   try {
-    const user = await findUserByEmail(pool, email);
+    const user = await findUserByEmail(getPool(), email);
     if (!user || !(await verifyPassword(password, user.password_hash))) {
       return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
     }
-    const token = await signToken(user.id, tokenSecret);
+    const token = await signToken(user.id, getTokenSecret());
     return NextResponse.json({
       token,
       user: { id: user.id, email: user.email, name: user.name },
     });
-  } catch {
-    return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
+  } catch (cause) {
+    // The caller learns nothing; the operator learns everything.
+    console.error(JSON.stringify(describeAuthError("login", cause)));
+    const failure = authErrorResponse(cause);
+    return NextResponse.json(failure.body, { status: failure.status });
   }
 }

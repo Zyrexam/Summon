@@ -17,6 +17,7 @@ export {
   MAX_SUMMON_CONTEXT_LINES,
   REPORT_TTL_MS,
 } from "./session";
+export { DEV_SECRET_FALLBACK, assertStrongSecret } from "./secret";
 export { DEFAULT_TOKEN_TTL_MS, signToken, verifyToken } from "./token";
 export type { SignTokenOptions, VerifyTokenOptions } from "./token";
 export { createRateLimiter } from "./rate-limit";

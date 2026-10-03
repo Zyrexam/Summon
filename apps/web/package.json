@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node --env-file=../../.env node_modules/next/dist/bin/next dev --port 3000",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
@@ -11,13 +11,13 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
+    "@neondatabase/serverless": "^1.2.0",
     "@shadcn/react": "^0.3.1",
     "@summon/core": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "lucide-react": "^1.47.0",
     "next": "^15.1.0",
-    "pg": "^8.13.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "shadcn": "^4.21.0",
@@ -26,7 +26,6 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",
     "@types/node": "^22.10.0",
-    "@types/pg": "^8.11.10",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "tailwindcss": "^4.0.0",
