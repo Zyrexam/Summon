@@ -14,20 +14,53 @@ Create a link, admit who you want, talk. When the call ends you get a short repo
 
 ## Setup
 
+You need a Postgres database. The app talks to it over Neon’s HTTP driver, so
+`DATABASE_URL` must be a Neon (or Neon-compatible) connection string — a local
+Postgres over TCP will not work.
+
 ```bash
 pnpm install
-docker compose up -d     # Postgres for auth only
-cp .env.example .env     # add GROQ_API_KEY to enable @ai
-pnpm dev                 # relay :8787, web :3000
+cp .env.example .env    # fill in DATABASE_URL, TOKEN_SECRET, GROQ_API_KEY
+pnpm dev                # relay :8787, web :3000
 ```
 
-`@ai` needs `GROQ_API_KEY`. Without it, chat and video work and `@ai` replies that it is unavailable.
+Apply `apps/server/schema.sql` once to create the `users` and `rate_limits`
+tables. It is `CREATE TABLE IF NOT EXISTS` only, so re-running it is safe.
+
+Generate a real token secret:
+
+```bash
+openssl rand -base64 48
+```
+
+`TOKEN_SECRET` must be **identical** on the web app and the relay: the web app
+signs session tokens, the relay verifies them.
+
+`@ai` needs `GROQ_API_KEY`. Without it, chat and video work and `@ai` replies
+that it is unavailable.
 
 Check the build:
 
 ```bash
 pnpm typecheck && pnpm test
 ```
+
+## Deploying
+
+Three deployables:
+
+| Piece | Where | Why |
+|---|---|---|
+| `apps/web` | Vercel | Stateless server-rendered app plus auth routes. `vercel.json` is included. |
+| `apps/server` | Fly.io / Railway / Render | A `ws` relay holding session state in memory; run `pnpm --filter @summon/server start`. |
+| Postgres | Neon | Users and rate-limit counters only. |
+
+The relay cannot run on Vercel: WebSocket connections are pinned to one function
+instance, so two peers in the same room could land apart and never connect.
+
+Set on Vercel: `DATABASE_URL`, `TOKEN_SECRET`, `TRUST_PROXY=true`, and
+`NEXT_PUBLIC_SIGNAL_URL` **as a build variable** (`NEXT_PUBLIC_*` values are
+inlined at build time). Set on the relay: `TOKEN_SECRET`, `GROQ_API_KEY`.
 
 ## Limits
 
@@ -38,6 +71,6 @@ pnpm typecheck && pnpm test
 
 ## Notes
 
-- `apps/server` is a `ws` relay. It authenticates, brokers WebRTC signalling, and keeps a session in memory. It stores no messages.
-- Postgres holds users and nothing else.
+- `apps/server` is a `ws` relay. It authenticates, brokers WebRTC signalling, and keeps a session in memory. It stores no messages and never touches the database.
+- The database holds users and rate-limit counters, and nothing else.
 - Logs are one JSON object per line, with tokens and keys redacted.
